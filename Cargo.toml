@@ -2,6 +2,8 @@
 name = "libsignal-dezire"
 version = "0.1.0"
 edition = "2024"
+repository= "https://github.com/debarkamondal/libsignal-dezire"
+license= "MIT"
 
 [dependencies]
 curve25519-dalek = {version ="4.1.3", features = ["digest"] }
