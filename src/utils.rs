@@ -11,7 +11,7 @@ use subtle::{Choice, ConditionallySelectable};
 ///
 /// This function is useful for converting a public key from its X25519 (key exchange)
 /// form to its Ed25519 (signing) form. It attempts to decompress the Montgomery
-/// point `u` to a full Edwards point and then re-compresses it.
+/// point `u` to a full Edwards point.
 ///
 /// # Arguments
 ///
@@ -38,7 +38,7 @@ pub fn u_to_y(u: [u8; 32]) -> EdwardsPoint {
 /// Applies the Curve25519 "clamping" modification to a 32-byte private key.
 ///
 /// Clamping is required for X25519 and Ed25519 private keys to ensure security
-/// and prevent small subgroup attacks.
+/// against small subgroup attacks.
 ///
 /// It performs the following operations as defined in RFC 7748:
 /// * `key[0] &= 248;` (clears the 3 least significant bits)
@@ -89,16 +89,20 @@ pub fn calculate_key_pair(u: [u8; 32]) -> (Scalar, EdwardsPoint) {
     (priv_key, public_key)
 }
 
-/// [STUB] This function converts a Montgomary u-coordinate to an Edwards point
+/// Converts a Montgomery u-coordinate to an Edwards point.
+///
+/// This acts as a wrapper around [`u_to_y`] but ensures the input is clamped/masked
+/// correctly before conversion, specifically handling the sign bit.
 ///
 /// # Arguments
 ///
-/// * `u` - A 32-byte array of Montgomery u-coordinate
+/// * `u` - A 32-byte array representing the Montgomery u-coordinate.
 ///
 /// # Returns
 ///
-/// A 32-byte array of Edwards curve y-coordinate
-/// **Note:** sign bit is not returned but it's always 0 (Jivsov's approach)
+/// A `EdwardsPoint` on the Curve25519.
+///
+/// **Note:** The sign bit is always retrieved as 0 (matching Jivsov's approach).
 
 pub fn convert_mont(u: [u8; 32]) -> EdwardsPoint {
     let mut u_masked = u;

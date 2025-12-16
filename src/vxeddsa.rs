@@ -13,17 +13,28 @@ use crate::{
     hashes::hashi,
     utils::{calculate_key_pair, convert_mont},
 };
+/// Represents a key pair containing a 32-byte secret key and a 32-byte public key.
 #[repr(C)]
 pub struct KeyPair {
+    /// The 32-byte secret key.
     pub secret: [u8; 32],
+    /// The 32-byte public key.
     pub public: [u8; 32],
 }
+
+/// Represents the output of a VXEdDSA signature operation.
 #[repr(C)]
 pub struct VXEdDSAOutput {
+    /// The 96-byte signature, consisting of `V || h || s`.
     pub signature: [u8; 96],
+    /// The 32-byte VRF output `v`, which serves as a proof of randomness.
     pub vfr: [u8; 32],
 }
 
+/// Generates a random Curve25519 key pair.
+///
+/// Use this function to create a new identity. It uses a cryptographically secure
+/// random number generator to create the secret key.
 #[unsafe(no_mangle)]
 pub extern "C" fn gen_keypair() -> KeyPair {
     let secret = StaticSecret::random_from_rng(&mut OsRng);
@@ -35,6 +46,12 @@ pub extern "C" fn gen_keypair() -> KeyPair {
     }
 }
 
+/// Generates a random 32-byte secret key and writes it to the provided buffer.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer.
+/// The caller must ensure that `secret_out` points to a valid, writable 32-byte memory region.
 #[unsafe(no_mangle)]
 pub extern "C" fn gen_secret(secret_out: *mut [u8; 32]) {
     let secret = StaticSecret::random_from_rng(&mut OsRng);
@@ -43,6 +60,12 @@ pub extern "C" fn gen_secret(secret_out: *mut [u8; 32]) {
     }
 }
 
+/// Derives a public key from a given 32-byte secret key.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer.
+/// The caller must ensure that `pubkey` points to a valid, writable 32-byte memory region.
 #[unsafe(no_mangle)]
 pub extern "C" fn gen_pubkey(k: &[u8; 32], pubkey: *mut [u8; 32]) {
     let secret = StaticSecret::from(*k);
@@ -60,7 +83,6 @@ pub extern "C" fn gen_pubkey(k: &[u8; 32], pubkey: *mut [u8; 32]) {
 ///
 /// * `k` - The 32-byte private key seed. Note that this is the raw seed, not the clamped scalar.
 /// * `M` - A reference to the 32-byte message to be signed.
-/// * `z` - A 32-byte high-entropy nonce (randomness). This is crucial for the security of the scheme.
 ///
 /// # Returns
 ///
