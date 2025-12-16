@@ -5,12 +5,51 @@ use curve25519_dalek::{
     scalar::Scalar,
     traits::IsIdentity,
 };
+use rand_core::OsRng;
 use sha2::Sha512;
+use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::{
     hashes::hashi,
     utils::{calculate_key_pair, convert_mont},
 };
+#[repr(C)]
+pub struct KeyPair {
+    pub secret: [u8; 32],
+    pub public: [u8; 32],
+}
+#[repr(C)]
+pub struct VXEdDSAOutput {
+    pub signature: [u8; 96],
+    pub vfr: [u8; 32],
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gen_keypair() -> KeyPair {
+    let secret = StaticSecret::random_from_rng(&mut OsRng);
+
+    let public = PublicKey::from(&secret);
+    KeyPair {
+        secret: secret.to_bytes(),
+        public: public.to_bytes(),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gen_secret(secret_out: *mut [u8; 32]) {
+    let secret = StaticSecret::random_from_rng(&mut OsRng);
+    unsafe {
+        (*secret_out).copy_from_slice(&secret.to_bytes());
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gen_pubkey(k: &[u8; 32], pubkey: *mut [u8; 32]) {
+    let secret = StaticSecret::from(*k);
+    unsafe {
+        (*pubkey).copy_from_slice(&PublicKey::from(&secret).as_bytes()[0..32]);
+    }
+}
 
 /// Computes a VXEdDSA signature and generates the associated VRF output.
 ///
@@ -33,7 +72,7 @@ use crate::{
 ///
 /// This function will panic if the calculated scalar `r` happens to be zero, which is a
 /// statistically negligible event.
-pub fn vxeddsa_sign(k: [u8; 32], M: &[u8; 32], z: &[u8; 32]) -> ([u8; 96], [u8; 32]) {
+pub fn vxeddsa_sign(k: [u8; 32], M: &[u8; 32]) -> ([u8; 96], [u8; 32]) {
     let (a, A) = calculate_key_pair(k);
 
     let a_bytes = A.compress().to_bytes();
@@ -53,12 +92,17 @@ pub fn vxeddsa_sign(k: [u8; 32], M: &[u8; 32], z: &[u8; 32]) -> ([u8; 96], [u8; 
     let V = Bv * a;
     let V_bytes = V.compress().to_bytes();
 
+    use rand_core::RngCore;
+    let mut z = [0u8; 32];
+    let mut rng = OsRng;
+    rng.fill_bytes(&mut z);
+
     // 4. r = hash3(a || V || Z) (mod q)
     // We concatenate bytes into a Vec for the hash input
     let mut r_msg = Vec::new();
     r_msg.extend_from_slice(a.as_bytes());
     r_msg.extend_from_slice(&V_bytes);
-    r_msg.extend_from_slice(z);
+    r_msg.extend_from_slice(&z);
 
     let r_hash = hashi(3, &r_msg);
 
@@ -158,6 +202,10 @@ pub fn vxeddsa_verify(u: [u8; 32], M: &[u8], signature: &[u8; 96]) -> Option<[u8
 
     // --- 4. Check for identity points ---
     if A.is_identity() || V.is_identity() || Bv.is_identity() {
+        use rand_core::RngCore;
+        let mut z = [0u8; 32];
+        let mut rng = OsRng;
+        rng.fill_bytes(&mut z);
         return None;
     }
 
@@ -196,165 +244,3 @@ pub fn vxeddsa_verify(u: [u8; 32], M: &[u8], signature: &[u8; 96]) -> Option<[u8
 
     Some(v)
 }
-// #![allow(non_snake_case)]
-// use curve25519_dalek::{
-//     EdwardsPoint, MontgomeryPoint, Scalar, constants::ED25519_BASEPOINT_POINT,
-//     edwards::CompressedEdwardsY, traits::IsIdentity,
-// };
-// use sha2::Sha512;
-//
-// use crate::{
-//     hashes::hashi,
-//     utils::{calculate_key_pair, convert_mont},
-// };
-//
-// pub fn vxeddsa_sign(k: [u8; 32], M: &[u8; 32], z: &[u8; 32]) -> ([u8; 96], [u8; 32]) {
-//     let (a, A) = calculate_key_pair(k);
-//     // let mut hasher = Sha512::new();
-//     // hasher.update(a_pub.to_bytes());
-//     // hasher.update(m);
-//     // let digest: [u8; 64] = hasher.finalize().into();
-//
-//     let a_bytes = A.compress().to_bytes();
-//     let mut point_msg = Vec::with_capacity(a_bytes.iter().len() + M.len());
-//     point_msg.extend_from_slice(&a_bytes);
-//     point_msg.extend_from_slice(M);
-//
-//     // We are using the Elligator2 according to the VXEdDSA protocol
-//     // It was deprecated back in 2023 in favour of RFC 9380
-//     // It's still secure cryptographically (atleast for now)
-//     // We currently plan to follow signal and their implementation
-//     #[warn(deprecated)]
-//     // Map to curve (Elligator 2) and clear cofactor (multiply by 8)
-//     let Bv = EdwardsPoint::nonspec_map_to_curve::<Sha512>(&point_msg).mul_by_cofactor();
-//
-//     // 3. V = a * Bv
-//     let V = Bv * a;
-//     let V_bytes = V.compress().to_bytes();
-//
-//     // 4. r = hash3(a || V || Z) (mod q)
-//     // We concatenate bytes into a Vec for the hash input
-//     let mut r_msg = Vec::new();
-//     r_msg.extend_from_slice(a.as_bytes());
-//     r_msg.extend_from_slice(&V_bytes);
-//     r_msg.extend_from_slice(z);
-//
-//     let r_hash = hashi(3, &r_msg);
-//
-//     let r = Scalar::from_bytes_mod_order_wide(&r_hash);
-//
-//     if r == Scalar::ZERO {
-//         panic!("Scalar r is zero. Cannot create signature.");
-//     }
-//
-//     // 5. R = r * B
-//     let R_point = ED25519_BASEPOINT_POINT * r;
-//     let R_bytes = R_point.compress().to_bytes();
-//
-//     // 6. Rv = r * Bv
-//     let Rv_point = Bv * r;
-//     let Rv_bytes = Rv_point.compress().to_bytes();
-//
-//     // 7. h = hash4(A || V || R || Rv || M) (mod q)
-//     let mut h_msg = Vec::new();
-//     h_msg.extend_from_slice(&a_bytes);
-//     h_msg.extend_from_slice(&V_bytes);
-//     h_msg.extend_from_slice(&R_bytes);
-//     h_msg.extend_from_slice(&Rv_bytes);
-//     h_msg.extend_from_slice(M);
-//
-//     let h_hash = hashi(4, &h_msg);
-//     let h = Scalar::from_bytes_mod_order_wide(&h_hash);
-//
-//     // 8. s = r + (h * a) (mod q)
-//     let s = r + (h * a);
-//
-//     // 9. v = hash5(cV) (mod 2^256, which basically means take 32 bytes)
-//     // cV means V multiplied by cofactor (8)
-//     let cV_point = V.mul_by_cofactor();
-//     let cV_bytes = cV_point.compress().to_bytes();
-//
-//     let v_hash_full = hashi(5, &cV_bytes);
-//     let mut v = [0u8; 32];
-//     v.copy_from_slice(&v_hash_full[0..32]);
-//
-//     // 10. return (V || h || s), v
-//     let mut signature = [0u8; 96];
-//     signature[0..32].copy_from_slice(&V_bytes);
-//     signature[32..64].copy_from_slice(&h.to_bytes());
-//     signature[64..96].copy_from_slice(&s.to_bytes());
-//     (signature, v)
-// }
-//
-// pub fn vxeddsa_verify(u: [u8; 32], M: &[u8], signature: &[u8; 96]) -> Option<[u8; 32]> {
-//     // --- 1. Parsing and splitting the signature ---
-//     let V_bytes = &signature[0..32];
-//     let h_bytes = &signature[32..64];
-//     let s_bytes = &signature[64..96];
-//
-//     // Deserialize Scalars.
-//     // from_canonical_bytes checks if scalar < L (CURVE_Q).
-//     // If check fails, it returns None, matching TS `if (h >= CURVE_Q...) return false`
-//     let h = Option::<Scalar>::from(Scalar::from_canonical_bytes(h_bytes.try_into().ok()?))?;
-//     let s = Option::<Scalar>::from(Scalar::from_canonical_bytes(s_bytes.try_into().ok()?))?;
-//
-//     // --- 2. Decompress Points & Check on_curve ---
-//
-//     // Convert X25519 u-coordinate to Ed25519 Point A
-//     // MontgomeryPoint::to_edwards(0) performs the conversion and checks validity.
-//     let A = convert_mont(u);
-//     let A_bytes = A.compress().to_bytes();
-//
-//     // Decompress V: Slice -> [u8;32] -> CompressedEdwardsY -> EdwardsPoint
-//     let V_arr: [u8; 32] = V_bytes.try_into().ok()?;
-//     let V = CompressedEdwardsY(V_arr).decompress()?;
-//
-//     // --- 3. Bv = hash_to_point(A || M) ---
-//     let mut point_msg = Vec::with_capacity(A_bytes.len() + M.len());
-//     point_msg.extend_from_slice(&A_bytes);
-//     point_msg.extend_from_slice(M);
-//
-//     // We must use the same deprecated map as the Sign function
-//     #[allow(deprecated)]
-//     let Bv = EdwardsPoint::nonspec_map_to_curve::<Sha512>(&point_msg).mul_by_cofactor();
-//
-//     // --- 4. Check for identity points ---
-//     if A.is_identity() || V.is_identity() || Bv.is_identity() {
-//         return None;
-//     }
-//
-//     // --- 5. R = sB - hA ---
-//     let R = (ED25519_BASEPOINT_POINT * s) - (A * h);
-//     let R_bytes = R.compress().to_bytes();
-//
-//     // --- 6. Rv = sBv - hV ---
-//     let Rv = (Bv * s) - (V * h);
-//     let Rv_bytes = Rv.compress().to_bytes();
-//
-//     // --- 7. hcheck = hash4(...) ---
-//     let mut h_msg = Vec::new();
-//     h_msg.extend_from_slice(&A_bytes);
-//     h_msg.extend_from_slice(&V_bytes);
-//     h_msg.extend_from_slice(&R_bytes);
-//     h_msg.extend_from_slice(&Rv_bytes);
-//     h_msg.extend_from_slice(M);
-//
-//     let hcheck_hash = hashi(4, &h_msg);
-//     let hcheck = Scalar::from_bytes_mod_order_wide(&hcheck_hash);
-//
-//     // --- 8. if bytes_equal(h, hcheck) ---
-//     if h != hcheck {
-//         return None;
-//     }
-//
-//     // --- 9. Success: return v ---
-//     // cV means V multiplied by cofactor (8)
-//     let cV_point = V.mul_by_cofactor();
-//     let cV_bytes = cV_point.compress().to_bytes();
-//
-//     let v_hash_full = hashi(5, &cV_bytes);
-//     let mut v = [0u8; 32];
-//     v.copy_from_slice(&v_hash_full[0..32]);
-//
-//     Some(v)
-// }
