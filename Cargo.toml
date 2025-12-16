@@ -1,6 +1,6 @@
 [package]
 name = "libsignal-dezire"
-version = "0.1.0"
+version = "0.1.01"
 edition = "2024"
 repository= "https://github.com/debarkamondal/libsignal-dezire"
 license= "MIT"
