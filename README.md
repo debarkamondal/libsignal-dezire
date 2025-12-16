@@ -14,10 +14,8 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-libsignal-dezire = { git = "https://github.com/debarkamondal/libsignal-dezire" }
+libsignal-dezire = "0.1.11"
 ```
-
-*Note: As this is a specific implementation, please check the version compatibility.*
 
 ## Usage
 
