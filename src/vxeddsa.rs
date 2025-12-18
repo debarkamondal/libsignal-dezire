@@ -381,3 +381,40 @@ pub extern "C" fn vxeddsa_verify(
     true
 }
 
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_genPubKey(
+    mut env: JNIEnv,
+    _class: jclass,
+    k_byte_array: jbyteArray,
+) -> jbyteArray {
+    let k_obj = unsafe { JByteArray::from_raw(k_byte_array) };
+
+    let k = env.convert_byte_array(&k_obj).unwrap();
+
+    if k.len() != 32 {
+        // Return null or throw logic
+        return std::ptr::null_mut();
+    }
+
+    let k_arr: [u8; 32] = k.try_into().unwrap();
+
+    let mut k_out = [0u8; 32];
+
+    // Call the rust signature we implemented
+    gen_pubkey(&k_arr, &mut k_out);
+
+    create_byte_array(&mut env, &k_out).unwrap()
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_genSecret(
+    mut env: JNIEnv,
+    _class: jclass,
+) -> jbyteArray {
+    let mut secret = [0u8; 32];
+    gen_secret(&mut secret);
+    create_byte_array(&mut env, &secret).unwrap()
+}
+
