@@ -28,7 +28,7 @@ pub struct VXEdDSAOutput {
     /// The 96-byte signature, consisting of `V || h || s`.
     pub signature: [u8; 96],
     /// The 32-byte VRF output `v`, which serves as a proof of randomness.
-    pub vfr: [u8; 32],
+    pub vrf: [u8; 32],
 }
 
 /// Generates a random Curve25519 key pair.
@@ -178,7 +178,7 @@ pub extern "C" fn vxeddsa_sign(k: &[u8; 32], M: &[u8; 32]) -> VXEdDSAOutput {
     // Fixed: Returns 'v' (VRF output) instead of 'V_bytes' (Part of signature)
     VXEdDSAOutput {
         signature: signature,
-        vfr: v,
+        vrf: v,
     }
 }
 
