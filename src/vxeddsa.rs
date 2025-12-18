@@ -474,7 +474,7 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_vxedds
     let map = env.new_object(map_class, "()V", &[]).unwrap();
 
     let signature_array = create_byte_array(&mut env, &output.signature).unwrap();
-    let vfr_array = create_byte_array(&mut env, &output.vfr).unwrap();
+    let vfr_array = create_byte_array(&mut env, &output.vrf).unwrap();
 
     let signature_key = env.new_string("signature").unwrap();
     let vfr_key = env.new_string("vfr").unwrap();
