@@ -380,7 +380,170 @@ pub extern "C" fn vxeddsa_verify(
 
     true
 }
+#[cfg(target_os = "android")]
+use jni::JNIEnv;
+#[cfg(target_os = "android")]
+use jni::objects::{JByteArray, JObject, JValue};
+#[cfg(target_os = "android")]
+use jni::sys::{jbyteArray, jclass, jobject};
 
+#[cfg(target_os = "android")]
+fn create_byte_array(env: &mut JNIEnv, bytes: &[u8]) -> jni::errors::Result<jbyteArray> {
+    let array = env.byte_array_from_slice(bytes)?;
+    Ok(array.into_raw())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_genKeyPair(
+    mut env: JNIEnv,
+    _class: jclass,
+) -> jobject {
+    let keys = gen_keypair();
+
+    let map_class = env.find_class("java/util/HashMap").unwrap();
+    let map = env.new_object(map_class, "()V", &[]).unwrap();
+
+    let secret_array = create_byte_array(&mut env, &keys.secret).unwrap();
+    let public_array = create_byte_array(&mut env, &keys.public).unwrap();
+
+    let secret_key = env.new_string("secret").unwrap();
+    let public_key = env.new_string("public").unwrap();
+
+    let secret_key_obj = JObject::from(secret_key);
+    let secret_array_obj = unsafe { JObject::from_raw(secret_array) };
+    let public_key_obj = JObject::from(public_key);
+    let public_array_obj = unsafe { JObject::from_raw(public_array) };
+
+    env.call_method(
+        &map,
+        "put",
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+        &[
+            JValue::Object(&secret_key_obj),
+            JValue::Object(&secret_array_obj),
+        ],
+    )
+    .unwrap();
+
+    env.call_method(
+        &map,
+        "put",
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+        &[
+            JValue::Object(&public_key_obj),
+            JValue::Object(&public_array_obj),
+        ],
+    )
+    .unwrap();
+
+    map.into_raw()
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_vxeddsaSign(
+    mut env: JNIEnv,
+    _class: jclass,
+    k_byte_array: jbyteArray,
+    m_byte_array: jbyteArray,
+) -> jobject {
+    let k_obj = unsafe { JByteArray::from_raw(k_byte_array) };
+    let m_obj = unsafe { JByteArray::from_raw(m_byte_array) };
+
+    let k = env.convert_byte_array(&k_obj).unwrap();
+    let m = env.convert_byte_array(&m_obj).unwrap();
+
+    // Check lengths securely? Or just assume caller is correct?
+    // Swift/TS checks lengths. We can do simple check.
+    if k.len() != 32 || m.len() != 32 {
+        let exception_class = env
+            .find_class("java/lang/IllegalArgumentException")
+            .unwrap();
+        env.throw_new(exception_class, "Inputs must be 32 bytes")
+            .unwrap();
+        return JObject::null().into_raw();
+    }
+
+    let k_arr: [u8; 32] = k.try_into().unwrap();
+    let m_arr: [u8; 32] = m.try_into().unwrap();
+
+    let output = vxeddsa_sign(&k_arr, &m_arr);
+
+    let map_class = env.find_class("java/util/HashMap").unwrap();
+    let map = env.new_object(map_class, "()V", &[]).unwrap();
+
+    let signature_array = create_byte_array(&mut env, &output.signature).unwrap();
+    let vfr_array = create_byte_array(&mut env, &output.vfr).unwrap();
+
+    let signature_key = env.new_string("signature").unwrap();
+    let vfr_key = env.new_string("vfr").unwrap();
+
+    let signature_key_obj = JObject::from(signature_key);
+    let signature_array_obj = unsafe { JObject::from_raw(signature_array) };
+    let vfr_key_obj = JObject::from(vfr_key);
+    let vfr_array_obj = unsafe { JObject::from_raw(vfr_array) };
+
+    env.call_method(
+        &map,
+        "put",
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+        &[
+            JValue::Object(&signature_key_obj),
+            JValue::Object(&signature_array_obj),
+        ],
+    )
+    .unwrap();
+
+    env.call_method(
+        &map,
+        "put",
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+        &[JValue::Object(&vfr_key_obj), JValue::Object(&vfr_array_obj)],
+    )
+    .unwrap();
+
+    map.into_raw()
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_vxeddsaVerify(
+    mut env: JNIEnv,
+    _class: jclass,
+    u_byte_array: jbyteArray,
+    m_byte_array: jbyteArray,
+    signature_byte_array: jbyteArray,
+) -> jbyteArray {
+    let u_obj = unsafe { JByteArray::from_raw(u_byte_array) };
+    let m_obj = unsafe { JByteArray::from_raw(m_byte_array) };
+    let sig_obj = unsafe { JByteArray::from_raw(signature_byte_array) };
+
+    let u = env.convert_byte_array(&u_obj).unwrap();
+    let m = env.convert_byte_array(&m_obj).unwrap();
+    let sig = env.convert_byte_array(&sig_obj).unwrap();
+
+    if u.len() != 32 || m.len() != 32 || sig.len() != 96 {
+        // Return null or throw logic
+        return std::ptr::null_mut();
+    }
+
+    let u_arr: [u8; 32] = u.try_into().unwrap();
+    let m_arr: [u8; 32] = m.try_into().unwrap();
+    let sig_arr: [u8; 96] = sig.try_into().unwrap();
+
+    let mut v_out = [0u8; 32];
+
+    // Call the rust signature we implemented
+    let valid = vxeddsa_verify(&u_arr, &m_arr, &sig_arr, &mut v_out);
+
+    if valid {
+        let out_array = create_byte_array(&mut env, &v_out).unwrap();
+        out_array
+    } else {
+        std::ptr::null_mut()
+    }
+}
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_genPubKey(
