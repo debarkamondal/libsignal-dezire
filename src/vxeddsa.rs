@@ -474,15 +474,15 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_vxedds
     let map = env.new_object(map_class, "()V", &[]).unwrap();
 
     let signature_array = create_byte_array(&mut env, &output.signature).unwrap();
-    let vfr_array = create_byte_array(&mut env, &output.vrf).unwrap();
+    let vrf_array = create_byte_array(&mut env, &output.vrf).unwrap();
 
     let signature_key = env.new_string("signature").unwrap();
-    let vfr_key = env.new_string("vfr").unwrap();
+    let vrf_key = env.new_string("vrf").unwrap();
 
     let signature_key_obj = JObject::from(signature_key);
     let signature_array_obj = unsafe { JObject::from_raw(signature_array) };
-    let vfr_key_obj = JObject::from(vfr_key);
-    let vfr_array_obj = unsafe { JObject::from_raw(vfr_array) };
+    let vrf_key_obj = JObject::from(vrf_key);
+    let vrf_array_obj = unsafe { JObject::from_raw(vrf_array) };
 
     env.call_method(
         &map,
@@ -499,7 +499,7 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_vxedds
         &map,
         "put",
         "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
-        &[JValue::Object(&vfr_key_obj), JValue::Object(&vfr_array_obj)],
+        &[JValue::Object(&vrf_key_obj), JValue::Object(&vrf_array_obj)],
     )
     .unwrap();
 
