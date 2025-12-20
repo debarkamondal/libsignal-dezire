@@ -13,3 +13,4 @@
 pub mod hashes;
 pub mod utils;
 pub mod vxeddsa;
+pub mod x3dh;

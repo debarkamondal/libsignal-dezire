@@ -95,7 +95,8 @@ pub extern "C" fn gen_pubkey(k: &[u8; 32], pubkey: *mut [u8; 32]) {
 /// This function will panic if the calculated scalar `r` happens to be zero, which is a
 /// statistically negligible event.
 #[unsafe(no_mangle)]
-pub extern "C" fn vxeddsa_sign(k: &[u8; 32], M: &[u8; 32]) -> VXEdDSAOutput {
+pub extern "C" fn vxeddsa_sign(k: &[u8; 32], msg_ptr: *const u8, msg_len: usize) -> VXEdDSAOutput {
+    let M = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
     let (a, A) = calculate_key_pair(*k);
 
     let a_bytes = A.compress().to_bytes();
@@ -281,10 +282,14 @@ pub extern "C" fn vxeddsa_sign(k: &[u8; 32], M: &[u8; 32]) -> VXEdDSAOutput {
 #[unsafe(no_mangle)]
 pub extern "C" fn vxeddsa_verify(
     u: &[u8; 32],
-    M: &[u8; 32],
+    msg_ptr: *const u8,
+    msg_len: usize,
     signature: &[u8; 96],
     v_out: *mut [u8; 32],
 ) -> bool {
+    // Reconstruct message slice
+    let M = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
+
     // --- 1. Parsing and splitting the signature ---
     let V_bytes = &signature[0..32];
     let h_bytes = &signature[32..64];
@@ -456,19 +461,18 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_vxedds
 
     // Check lengths securely? Or just assume caller is correct?
     // Swift/TS checks lengths. We can do simple check.
-    if k.len() != 32 || m.len() != 32 {
+    if k.len() != 32 {
         let exception_class = env
             .find_class("java/lang/IllegalArgumentException")
             .unwrap();
-        env.throw_new(exception_class, "Inputs must be 32 bytes")
+        env.throw_new(exception_class, "Secret key must be 32 bytes")
             .unwrap();
         return JObject::null().into_raw();
     }
 
     let k_arr: [u8; 32] = k.try_into().unwrap();
-    let m_arr: [u8; 32] = m.try_into().unwrap();
-
-    let output = vxeddsa_sign(&k_arr, &m_arr);
+    // m is already Vec<u8> from convert_byte_array
+    let output = vxeddsa_sign(&k_arr, m.as_ptr(), m.len());
 
     let map_class = env.find_class("java/util/HashMap").unwrap();
     let map = env.new_object(map_class, "()V", &[]).unwrap();
@@ -523,19 +527,19 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_vxedds
     let m = env.convert_byte_array(&m_obj).unwrap();
     let sig = env.convert_byte_array(&sig_obj).unwrap();
 
-    if u.len() != 32 || m.len() != 32 || sig.len() != 96 {
+    if u.len() != 32 || sig.len() != 96 {
         // Return null or throw logic
         return std::ptr::null_mut();
     }
 
     let u_arr: [u8; 32] = u.try_into().unwrap();
-    let m_arr: [u8; 32] = m.try_into().unwrap();
+    // m is Vec<u8>
     let sig_arr: [u8; 96] = sig.try_into().unwrap();
 
     let mut v_out = [0u8; 32];
 
     // Call the rust signature we implemented
-    let valid = vxeddsa_verify(&u_arr, &m_arr, &sig_arr, &mut v_out);
+    let valid = vxeddsa_verify(&u_arr, m.as_ptr(), m.len(), &sig_arr, &mut v_out);
 
     if valid {
         let out_array = create_byte_array(&mut env, &v_out).unwrap();
@@ -580,4 +584,3 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_genSec
     gen_secret(&mut secret);
     create_byte_array(&mut env, &secret).unwrap()
 }
-
