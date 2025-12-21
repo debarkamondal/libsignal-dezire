@@ -2,10 +2,33 @@
 //! focusing on key generation and conversions between Montgomery (X25519)
 //! and Edwards (Ed25519) curve forms.
 
+use curve25519_dalek::traits::IsIdentity as _;
 use curve25519_dalek::{
     EdwardsPoint, Scalar, constants::ED25519_BASEPOINT_POINT, montgomery::MontgomeryPoint,
 };
 use subtle::{Choice, ConditionallySelectable};
+
+pub fn is_valid_public_key(pk: &[u8; 32]) -> bool {
+    // Reject all-zero
+    if pk.iter().all(|&b| b == 0) {
+        return false;
+    }
+
+    // Convert to Edwards
+    let edwards = convert_mont(*pk);
+
+    // Check not identity
+    if edwards.is_identity() {
+        return false;
+    }
+
+    // Check cofactor-cleared point not identity (catches low-order)
+    if edwards.mul_by_cofactor().is_identity() {
+        return false;
+    }
+
+    true
+}
 
 /// Converts a Montgomery u-coordinate (X25519) to a compressed Edwards point (Ed25519).
 ///

@@ -6,6 +6,7 @@ use curve25519_dalek::{
     traits::IsIdentity,
 };
 use rand_core::OsRng;
+use subtle::ConstantTimeEq;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::{
@@ -143,7 +144,7 @@ pub extern "C" fn vxeddsa_sign(
 
     let r = Scalar::from_bytes_mod_order_wide(&r_hash);
 
-    if r == Scalar::ZERO {
+    if r.ct_eq(&Scalar::ZERO).into() {
         return -1;
     }
 
@@ -194,102 +195,6 @@ pub extern "C" fn vxeddsa_sign(
     0
 }
 
-// pub fn vxeddsa_sign(k: [u8; 32], M: &[u8; 32]) -> ([u8; 96], [u8; 32]) {
-//     let (a, A) = calculate_key_pair(k);
-//
-//     let a_bytes = A.compress().to_bytes();
-//     let mut point_msg = Vec::with_capacity(a_bytes.iter().len() + M.len());
-//     point_msg.extend_from_slice(&a_bytes);
-//     point_msg.extend_from_slice(M);
-//
-//     // We are using the Elligator2 according to the VXEdDSA protocol
-//     // It was deprecated back in 2023 in favour of RFC 9380
-//     // It's still secure cryptographically (atleast for now)
-//     // We currently plan to follow signal and their implementation
-//     #[allow(deprecated)]
-//     // Map to curve (Elligator 2) and clear cofactor (multiply by 8)
-//     let Bv = EdwardsPoint::nonspec_map_to_curve::<Sha512>(&point_msg).mul_by_cofactor();
-//
-//     // 3. V = a * Bv
-//     let V = Bv * a;
-//     let V_bytes = V.compress().to_bytes();
-//
-//     use rand_core::RngCore;
-//     let mut z = [0u8; 32];
-//     let mut rng = OsRng;
-//     rng.fill_bytes(&mut z);
-//
-//     // 4. r = hash3(a || V || Z) (mod q)
-//     // We concatenate bytes into a Vec for the hash input
-//     let mut r_msg = Vec::new();
-//     r_msg.extend_from_slice(a.as_bytes());
-//     r_msg.extend_from_slice(&V_bytes);
-//     r_msg.extend_from_slice(&z);
-//
-//     let r_hash = hashi(3, &r_msg);
-//
-//     let r = Scalar::from_bytes_mod_order_wide(&r_hash);
-//
-//     if r == Scalar::ZERO {
-//         panic!("Scalar r is zero. Cannot create signature.");
-//     }
-//
-//     // 5. R = r * B
-//     let R_point = ED25519_BASEPOINT_POINT * r;
-//     let R_bytes = R_point.compress().to_bytes();
-//
-//     // 6. Rv = r * Bv
-//     let Rv_point = Bv * r;
-//     let Rv_bytes = Rv_point.compress().to_bytes();
-//
-//     // 7. h = hash4(A || V || R || Rv || M) (mod q)
-//     let mut h_msg = Vec::new();
-//     h_msg.extend_from_slice(&a_bytes);
-//     h_msg.extend_from_slice(&V_bytes);
-//     h_msg.extend_from_slice(&R_bytes);
-//     h_msg.extend_from_slice(&Rv_bytes);
-//     h_msg.extend_from_slice(M);
-//
-//     let h_hash = hashi(4, &h_msg);
-//     let h = Scalar::from_bytes_mod_order_wide(&h_hash);
-//
-//     // 8. s = r + (h * a) (mod q)
-//     let s = r + (h * a);
-//
-//     // 9. v = hash5(cV) (mod 2^256, which basically means take 32 bytes)
-//     // cV means V multiplied by cofactor (8)
-//     let cV_point = V.mul_by_cofactor();
-//     let cV_bytes = cV_point.compress().to_bytes();
-//
-//     let v_hash_full = hashi(5, &cV_bytes);
-//     let mut v = [0u8; 32];
-//     v.copy_from_slice(&v_hash_full[0..32]);
-//
-//     // 10. return (V || h || s), v
-//     let mut signature = [0u8; 96];
-//     signature[0..32].copy_from_slice(&V_bytes);
-//     signature[32..64].copy_from_slice(&h.to_bytes());
-//     signature[64..96].copy_from_slice(&s.to_bytes());
-//
-//     // Fixed: Returns 'v' (VRF output) instead of 'V_bytes' (Part of signature)
-//     (signature, v)
-// }
-
-/// Verifies a VXEdDSA signature and derives the VRF output.
-///
-/// Checks that the provided signature is valid for the given public key `u` and message `M`.
-/// If valid, it returns the VRF output `v`.
-///
-/// # Arguments
-///
-/// * `u` - The X25519 public key (Montgomery u-coordinate) as a 32-byte array.
-/// * `M` - A reference to the message bytes.
-/// * `signature` - The 96-byte signature array (containing `V`, `h`, and `s`).
-///
-/// # Returns
-///
-/// * `Some([u8; 32])` - The VRF output `v` if the signature is valid.
-/// * `None` - If the signature is invalid, the point `u` is invalid, or any identity checks fail.
 #[unsafe(no_mangle)]
 pub extern "C" fn vxeddsa_verify(
     u: &[u8; 32],
@@ -354,8 +259,8 @@ pub extern "C" fn vxeddsa_verify(
     // --- 4. Check for identity points ---
 
     let cA = A.mul_by_cofactor();
-    let cV_point = V.mul_by_cofactor();
-    if cA.is_identity() || V.is_identity() || Bv.is_identity() {
+    let cV = V.mul_by_cofactor();
+    if cA.is_identity() || cV.is_identity() || Bv.is_identity() {
         return false;
     }
 
@@ -385,7 +290,7 @@ pub extern "C" fn vxeddsa_verify(
 
     // --- 9. Success: return v ---
 
-    let v_hash_full = hash_i(5, &cV_point.compress().to_bytes());
+    let v_hash_full = hash_i(5, &cV.compress().to_bytes());
 
     // Write output to pointer if not null
     if !v_out.is_null() {

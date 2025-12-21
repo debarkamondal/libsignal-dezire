@@ -1,7 +1,7 @@
 use sha2::Sha512;
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::utils::encode_public_key;
+use crate::utils::{encode_public_key, is_valid_public_key};
 use crate::vxeddsa::{gen_pubkey, gen_secret, vxeddsa_verify};
 
 /// Represents a 32-byte X25519 Public Key.
@@ -113,6 +113,19 @@ pub extern "C" fn x3dh_initiator(
         None
     };
 
+    // 0. Verify Key Validity (Public keys must be valid points)
+    if !is_valid_public_key(bob_identity_public)
+        || !is_valid_public_key(bob_spk_public)
+        || (has_opk
+            && !bob_opk_public.is_null()
+            && !is_valid_public_key(unsafe { &*(bob_opk_public as *const [u8; 32]) }))
+    {
+        unsafe {
+            (*output).status = -2; // Invalid Key
+        }
+        return -1;
+    }
+
     let bundle = PreKeyBundle {
         identity_key: *bob_identity_public,
         signed_prekey,
@@ -212,6 +225,14 @@ pub extern "C" fn x3dh_responder(
     } else {
         None
     };
+
+    // 0. Verify Key Validity
+    if !is_valid_public_key(alice_identity_public) || !is_valid_public_key(alice_ephemeral_public) {
+        unsafe {
+            *shared_secret_out = [0u8; 32];
+        }
+        return -1;
+    }
 
     // 1. Calculate DHs
 
