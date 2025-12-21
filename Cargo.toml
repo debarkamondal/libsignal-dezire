@@ -14,6 +14,7 @@ subtle = "2.6.1"
 x25519-dalek = {version= "2.0.1", features = ["static_secrets"]}
 jni= "0.21.1"
 hkdf = "0.12.4"
+zeroize = { version = "1.6", features = ["zeroize_derive"] }
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]

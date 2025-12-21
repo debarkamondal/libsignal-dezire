@@ -15,8 +15,15 @@ fn test_sign_and_verify_success() {
     let mut public_u = [0u8; 32];
     gen_pubkey(&seed_k, &mut public_u as *mut [u8; 32]);
 
-    // 3. Sign
-    let output = vxeddsa_sign(&seed_k, msg_bytes.as_ptr(), msg_bytes.len());
+    // 3. Sign (nonce is now generated internally)
+    let mut output = libsignal_dezire::vxeddsa::VXEdDSAOutput {
+        signature: [0u8; 96],
+        vrf: [0u8; 32],
+    };
+
+    let status = vxeddsa_sign(&seed_k, msg_bytes.as_ptr(), msg_bytes.len(), &mut output);
+    assert_eq!(status, 0, "Signing failed");
+
     let signature = output.signature;
     let v_generated = output.vrf;
 
@@ -49,7 +56,11 @@ fn test_verify_fails_on_wrong_message() {
     let mut public_u = [0u8; 32];
     gen_pubkey(&seed_k, &mut public_u as *mut [u8; 32]);
 
-    let output = vxeddsa_sign(&seed_k, msg_bytes.as_ptr(), msg_bytes.len());
+    let mut output = libsignal_dezire::vxeddsa::VXEdDSAOutput {
+        signature: [0u8; 96],
+        vrf: [0u8; 32],
+    };
+    vxeddsa_sign(&seed_k, msg_bytes.as_ptr(), msg_bytes.len(), &mut output);
     let signature = output.signature;
 
     // Create a different message
@@ -76,7 +87,11 @@ fn test_verify_fails_on_wrong_key() {
     let mut msg_bytes = [0u8; 32];
     gen_secret(&mut msg_bytes as *mut [u8; 32]);
 
-    let output = vxeddsa_sign(&seed_k, msg_bytes.as_ptr(), msg_bytes.len());
+    let mut output = libsignal_dezire::vxeddsa::VXEdDSAOutput {
+        signature: [0u8; 96],
+        vrf: [0u8; 32],
+    };
+    vxeddsa_sign(&seed_k, msg_bytes.as_ptr(), msg_bytes.len(), &mut output);
     let signature = output.signature;
 
     // Use a completely different key for verification
@@ -109,7 +124,11 @@ fn test_verify_fails_on_corrupted_signature() {
     let mut public_u = [0u8; 32];
     gen_pubkey(&seed_k, &mut public_u as *mut [u8; 32]);
 
-    let output = vxeddsa_sign(&seed_k, msg_bytes.as_ptr(), msg_bytes.len());
+    let mut output = libsignal_dezire::vxeddsa::VXEdDSAOutput {
+        signature: [0u8; 96],
+        vrf: [0u8; 32],
+    };
+    vxeddsa_sign(&seed_k, msg_bytes.as_ptr(), msg_bytes.len(), &mut output);
     let original_sig = output.signature;
 
     // Corrupt the V part (first 32 bytes)

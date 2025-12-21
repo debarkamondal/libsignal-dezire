@@ -109,3 +109,71 @@ pub fn convert_mont(u: [u8; 32]) -> EdwardsPoint {
     u_masked[31] &= 127;
     u_to_y(u_masked)
 }
+
+/// Encodes a public key by prepending 0x05 (Curve25519) to the 32-byte key.
+///
+/// This aligns with the Signal Protocol's `Encode(K)` specification for
+/// standard X25519 public keys.
+///
+/// # Arguments
+///
+/// * `key` - The 32-byte public key.
+/// * `out` - A pointer to a 33-byte buffer where the encoded key will be written.
+///
+/// # Safety
+///
+/// The caller must ensure that `out` is valid for writes of 33 bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn encode_public_key(key: &[u8; 32], out: *mut u8) {
+    if out.is_null() {
+        return;
+    }
+    unsafe {
+        *out = 0x05;
+        std::ptr::copy_nonoverlapping(key.as_ptr(), out.add(1), 32);
+    }
+}
+
+#[cfg(target_os = "android")]
+use jni::JNIEnv;
+#[cfg(target_os = "android")]
+use jni::objects::{JByteArray, JClass};
+#[cfg(target_os = "android")]
+use jni::sys::{jbyteArray, jclass};
+
+#[cfg(target_os = "android")]
+fn create_byte_array(env: &mut JNIEnv, bytes: &[u8]) -> jni::errors::Result<jbyteArray> {
+    let array = env.byte_array_from_slice(bytes)?;
+    Ok(array.into_raw())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_encodePublicKey(
+    mut env: JNIEnv,
+    _class: jclass,
+    key_byte_array: jbyteArray,
+) -> jbyteArray {
+    let key_obj = unsafe { JByteArray::from_raw(key_byte_array) };
+    let key = match env.convert_byte_array(&key_obj) {
+        Ok(k) => k,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    if key.len() != 32 {
+        return std::ptr::null_mut();
+    }
+
+    let key_arr: [u8; 32] = match key.try_into() {
+        Ok(arr) => arr,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let mut encoded = [0u8; 33];
+    encode_public_key(&key_arr, encoded.as_mut_ptr());
+
+    match create_byte_array(&mut env, &encoded) {
+        Ok(ptr) => ptr,
+        Err(_) => std::ptr::null_mut(),
+    }
+}

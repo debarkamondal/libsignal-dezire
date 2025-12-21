@@ -6,11 +6,10 @@ use curve25519_dalek::{
     traits::IsIdentity,
 };
 use rand_core::OsRng;
-use sha2::Sha512;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::{
-    hashes::hashi,
+    hashes::{SignalHash2, hash_i},
     utils::{calculate_key_pair, convert_mont},
 };
 /// Represents a key pair containing a 32-byte secret key and a 32-byte public key.
@@ -24,6 +23,7 @@ pub struct KeyPair {
 
 /// Represents the output of a VXEdDSA signature operation.
 #[repr(C)]
+#[derive(Debug, PartialEq)]
 pub struct VXEdDSAOutput {
     /// The 96-byte signature, consisting of `V || h || s`.
     pub signature: [u8; 96],
@@ -79,23 +79,35 @@ pub extern "C" fn gen_pubkey(k: &[u8; 32], pubkey: *mut [u8; 32]) {
 /// This function implements the signing logic specified in the VXEdDSA protocol (Signal).
 /// It produces a deterministic signature and a proof of randomness (v).
 ///
+/// The random nonce `Z` is generated internally using `OsRng` for security.
+///
 /// # Arguments
 ///
 /// * `k` - The 32-byte private key seed. Note that this is the raw seed, not the clamped scalar.
-/// * `M` - A reference to the 32-byte message to be signed.
+/// * `msg_ptr` - Pointer to the message bytes to sign.
+/// * `msg_len` - Length of the message.
+/// * `output` - Pointer to a VXEdDSAOutput struct where results will be written.
 ///
 /// # Returns
 ///
-/// A VXEdDSAOutput struct containing:
-/// 1. sign: The **Signature** (96 bytes): Concatenation of `V || h || s`.
-/// 2. vrf: The **VRF Output** (32 bytes): The value `v`, which serves as the verifiable random output.
+/// * `0` on success.
+/// * `-1` on error (e.g. invalid scalar).
 ///
-/// # Panics
-///
-/// This function will panic if the calculated scalar `r` happens to be zero, which is a
-/// statistically negligible event.
+/// A VXEdDSAOutput struct is written to `output` pointer on success.
 #[unsafe(no_mangle)]
-pub extern "C" fn vxeddsa_sign(k: &[u8; 32], msg_ptr: *const u8, msg_len: usize) -> VXEdDSAOutput {
+pub extern "C" fn vxeddsa_sign(
+    k: &[u8; 32],
+    msg_ptr: *const u8,
+    msg_len: usize,
+    output: *mut VXEdDSAOutput,
+) -> i32 {
+    use rand_core::RngCore;
+    use zeroize::Zeroize;
+
+    // Generate random nonce internally for security
+    let mut Z = [0u8; 64];
+    OsRng.fill_bytes(&mut Z);
+
     let M = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
     let (a, A) = calculate_key_pair(*k);
 
@@ -110,7 +122,7 @@ pub extern "C" fn vxeddsa_sign(k: &[u8; 32], msg_ptr: *const u8, msg_len: usize)
     // We currently plan to follow signal and their implementation
     #[allow(deprecated)]
     // Map to curve (Elligator 2) and clear cofactor (multiply by 8)
-    let Bv = EdwardsPoint::nonspec_map_to_curve::<Sha512>(&point_msg).mul_by_cofactor();
+    let Bv = EdwardsPoint::nonspec_map_to_curve::<SignalHash2>(&point_msg).mul_by_cofactor();
 
     // 3. V = a * Bv
     let V = Bv * a;
@@ -121,22 +133,18 @@ pub extern "C" fn vxeddsa_sign(k: &[u8; 32], msg_ptr: *const u8, msg_len: usize)
     let mut r_msg = Vec::new();
     r_msg.extend_from_slice(a.as_bytes());
     r_msg.extend_from_slice(&V_bytes);
-    use rand_core::RngCore;
-    let mut z = [0u8; 32];
-    let mut rng = OsRng;
-    rng.fill_bytes(&mut z);
+    r_msg.extend_from_slice(&Z);
 
-    let mut r_msg = Vec::new();
-    r_msg.extend_from_slice(a.as_bytes());
-    r_msg.extend_from_slice(&V_bytes);
-    r_msg.extend_from_slice(&z);
+    let r_hash = hash_i(3, &r_msg);
 
-    let r_hash = hashi(3, &r_msg);
+    // Zeroize sensitive data after use
+    Z.zeroize();
+    r_msg.zeroize();
 
     let r = Scalar::from_bytes_mod_order_wide(&r_hash);
 
     if r == Scalar::ZERO {
-        panic!("Scalar r is zero. Cannot create signature.");
+        return -1;
     }
 
     // 5. R = r * B
@@ -155,7 +163,7 @@ pub extern "C" fn vxeddsa_sign(k: &[u8; 32], msg_ptr: *const u8, msg_len: usize)
     h_msg.extend_from_slice(&Rv_bytes);
     h_msg.extend_from_slice(M);
 
-    let h_hash = hashi(4, &h_msg);
+    let h_hash = hash_i(4, &h_msg);
     let h = Scalar::from_bytes_mod_order_wide(&h_hash);
 
     // 8. s = r + (h * a) (mod q)
@@ -166,7 +174,7 @@ pub extern "C" fn vxeddsa_sign(k: &[u8; 32], msg_ptr: *const u8, msg_len: usize)
     let cV_point = V.mul_by_cofactor();
     let cV_bytes = cV_point.compress().to_bytes();
 
-    let v_hash_full = hashi(5, &cV_bytes);
+    let v_hash_full = hash_i(5, &cV_bytes);
     let mut v = [0u8; 32];
     v.copy_from_slice(&v_hash_full[0..32]);
 
@@ -177,10 +185,13 @@ pub extern "C" fn vxeddsa_sign(k: &[u8; 32], msg_ptr: *const u8, msg_len: usize)
     signature[64..96].copy_from_slice(&s.to_bytes());
 
     // Fixed: Returns 'v' (VRF output) instead of 'V_bytes' (Part of signature)
-    VXEdDSAOutput {
-        signature: signature,
-        vrf: v,
+    unsafe {
+        (*output) = VXEdDSAOutput {
+            signature: signature,
+            vrf: v,
+        };
     }
+    0
 }
 
 // pub fn vxeddsa_sign(k: [u8; 32], M: &[u8; 32]) -> ([u8; 96], [u8; 32]) {
@@ -338,10 +349,13 @@ pub extern "C" fn vxeddsa_verify(
 
     // We must use the same deprecated map as the Sign function
     #[allow(deprecated)]
-    let Bv = EdwardsPoint::nonspec_map_to_curve::<Sha512>(&point_msg).mul_by_cofactor();
+    let Bv = EdwardsPoint::nonspec_map_to_curve::<SignalHash2>(&point_msg).mul_by_cofactor();
 
     // --- 4. Check for identity points ---
-    if A.is_identity() || V.is_identity() || Bv.is_identity() {
+
+    let cA = A.mul_by_cofactor();
+    let cV_point = V.mul_by_cofactor();
+    if cA.is_identity() || V.is_identity() || Bv.is_identity() {
         return false;
     }
 
@@ -361,7 +375,7 @@ pub extern "C" fn vxeddsa_verify(
     h_msg.extend_from_slice(&Rv_bytes);
     h_msg.extend_from_slice(M);
 
-    let hcheck_hash = hashi(4, &h_msg);
+    let hcheck_hash = hash_i(4, &h_msg);
     let hcheck = Scalar::from_bytes_mod_order_wide(&hcheck_hash);
 
     // --- 8. if bytes_equal(h, hcheck) ---
@@ -370,11 +384,8 @@ pub extern "C" fn vxeddsa_verify(
     }
 
     // --- 9. Success: return v ---
-    // cV means V multiplied by cofactor (8)
-    let cV_point = V.mul_by_cofactor();
-    let cV_bytes = cV_point.compress().to_bytes();
 
-    let v_hash_full = hashi(5, &cV_bytes);
+    let v_hash_full = hash_i(5, &cV_point.compress().to_bytes());
 
     // Write output to pointer if not null
     if !v_out.is_null() {
@@ -459,8 +470,6 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_vxedds
     let k = env.convert_byte_array(&k_obj).unwrap();
     let m = env.convert_byte_array(&m_obj).unwrap();
 
-    // Check lengths securely? Or just assume caller is correct?
-    // Swift/TS checks lengths. We can do simple check.
     if k.len() != 32 {
         let exception_class = env
             .find_class("java/lang/IllegalArgumentException")
@@ -471,8 +480,20 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_vxedds
     }
 
     let k_arr: [u8; 32] = k.try_into().unwrap();
-    // m is already Vec<u8> from convert_byte_array
-    let output = vxeddsa_sign(&k_arr, m.as_ptr(), m.len());
+
+    let mut output = VXEdDSAOutput {
+        signature: [0u8; 96],
+        vrf: [0u8; 32],
+    };
+
+    let status = vxeddsa_sign(&k_arr, m.as_ptr(), m.len(), &mut output);
+
+    if status != 0 {
+        let exception_class = env.find_class("java/lang/RuntimeException").unwrap();
+        env.throw_new(exception_class, "VXEdDSA Signing Failed")
+            .unwrap();
+        return JObject::null().into_raw();
+    }
 
     let map_class = env.find_class("java/util/HashMap").unwrap();
     let map = env.new_object(map_class, "()V", &[]).unwrap();
