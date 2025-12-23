@@ -11,6 +11,7 @@
 //! * `hashes` - Cryptographic hash function abstractions.
 
 pub mod hashes;
+pub mod ratchet;
 pub mod utils;
 pub mod vxeddsa;
 pub mod x3dh;
