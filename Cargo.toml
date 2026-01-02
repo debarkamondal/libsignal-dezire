@@ -1,6 +1,6 @@
 [package]
 name = "libsignal-dezire"
-version = "0.1.141"
+version = "0.1.142"
 edition = "2024"
 repository= "https://github.com/debarkamondal/libsignal-dezire"
 license= "AGPL-3.0-only"
@@ -14,8 +14,10 @@ subtle = "2.6.1"
 x25519-dalek = {version= "2.0.1", features = ["static_secrets"]}
 jni= "0.21.1"
 hkdf = "0.12.4"
-zeroize = { version = "1.6", features = ["zeroize_derive"] }
+zeroize = { version = "1.6", features = ["derive", "zeroize_derive"] }
+aes = "0.8.4"
 aes-gcm = "0.10.3"
+cbc = { version = "0.1.2", features = ["alloc"] }
 hmac = "0.12.1"
 
 [lib]
