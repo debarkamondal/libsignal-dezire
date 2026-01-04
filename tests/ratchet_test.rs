@@ -1,4 +1,4 @@
-use libsignal_dezire::ratchet::DoubleRatchet;
+use libsignal_dezire::ratchet::{decrypt, encrypt, init_receiver_state, init_sender_state};
 use rand_core::OsRng;
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -6,83 +6,89 @@ use x25519_dalek::{PublicKey, StaticSecret};
 fn test_ratchet_integration_basic_flow() {
     let sk = [0x55u8; 32]; // Shared secret
 
-    // 1. Setup Alice and Bob
+    // 1. Setup Sender and Receiver
     let mut rng = OsRng;
-    let bob_dh_private = StaticSecret::random_from_rng(&mut rng);
-    let bob_dh_public = PublicKey::from(&bob_dh_private);
+    let receiver_dh_private = StaticSecret::random_from_rng(&mut rng);
+    let receiver_dh_public = PublicKey::from(&receiver_dh_private);
 
-    // Header encryption keys (shared between Alice and Bob)
-    let shared_hka = [0xAAu8; 32];
-    let shared_nhkb = [0xBBu8; 32];
+    // Header encryption keys (shared between Sender and Receiver)
+    
+    
 
-    let mut alice = DoubleRatchet::new_alice(sk, bob_dh_public, shared_hka, shared_nhkb);
-    let mut bob =
-        DoubleRatchet::new_bob(sk, (bob_dh_private, bob_dh_public), shared_hka, shared_nhkb);
+    let sender = init_sender_state(sk, receiver_dh_public).unwrap();
+    let receiver = init_receiver_state(
+        sk,
+        (receiver_dh_private, receiver_dh_public),
+        
+        
+    );
 
-    // 2. Alice sends message 1 to Bob
-    let msg1 = b"Hello Bob!";
+    // 2. Sender sends message 1 to Receiver
+    let msg1 = b"Hello Receiver!";
     let ad1 = b"Metadata";
-    let (head1, cipher1) = alice.ratchet_encrypt(msg1, ad1).expect("encrypt 1");
+    let (sender, head1, cipher1) = encrypt(sender, msg1, ad1).expect("encrypt 1");
 
-    let decrypted1 = bob
-        .ratchet_decrypt(&head1, &cipher1, ad1)
-        .expect("Bob decrypts msg1");
+    let (receiver, decrypted1) =
+        decrypt(receiver, &head1, &cipher1, ad1).expect("Receiver decrypts msg1");
     assert_eq!(decrypted1, msg1);
 
-    // 3. Bob sends message 1 to Alice (Reply)
-    let msg2 = b"Hello Alice!";
+    // 3. Receiver sends message 1 to Sender (Reply)
+    let msg2 = b"Hello Sender!";
     let ad2 = b"More Metadata";
-    let (head2, cipher2) = bob.ratchet_encrypt(msg2, ad2).expect("encrypt 2");
+    let (receiver, head2, cipher2) = encrypt(receiver, msg2, ad2).expect("encrypt 2");
 
-    let decrypted2 = alice
-        .ratchet_decrypt(&head2, &cipher2, ad2)
-        .expect("Alice decrypts msg2");
+    let (sender, decrypted2) =
+        decrypt(sender, &head2, &cipher2, ad2).expect("Sender decrypts msg2");
     assert_eq!(decrypted2, msg2);
 
-    // 4. Alice sends message 2
+    // 4. Sender sends message 2
     let msg3 = b"How are you?";
-    let (head3, cipher3) = alice.ratchet_encrypt(msg3, &[]).expect("encrypt 3");
-    let decrypted3 = bob
-        .ratchet_decrypt(&head3, &cipher3, &[])
-        .expect("Bob decrypts msg3");
+    let (sender, head3, cipher3) = encrypt(sender, msg3, &[]).expect("encrypt 3");
+    let (_receiver, decrypted3) =
+        decrypt(receiver, &head3, &cipher3, &[]).expect("Receiver decrypts msg3");
     assert_eq!(decrypted3, msg3);
+
+    // Suppress unused variable warning
+    let _ = sender;
 }
 
 #[test]
 fn test_ratchet_integration_out_of_order() {
     let sk = [0x66u8; 32];
     let mut rng = OsRng;
-    let bob_dh_private = StaticSecret::random_from_rng(&mut rng);
-    let bob_dh_public = PublicKey::from(&bob_dh_private);
+    let receiver_dh_private = StaticSecret::random_from_rng(&mut rng);
+    let receiver_dh_public = PublicKey::from(&receiver_dh_private);
 
-    // Header encryption keys (shared between Alice and Bob)
-    let shared_hka = [0xAAu8; 32];
-    let shared_nhkb = [0xBBu8; 32];
+    // Header encryption keys (shared between Sender and Receiver)
+    
+    
 
-    let mut alice = DoubleRatchet::new_alice(sk, bob_dh_public, shared_hka, shared_nhkb);
-    let mut bob =
-        DoubleRatchet::new_bob(sk, (bob_dh_private, bob_dh_public), shared_hka, shared_nhkb);
+    let sender = init_sender_state(sk, receiver_dh_public).unwrap();
+    let receiver = init_receiver_state(
+        sk,
+        (receiver_dh_private, receiver_dh_public),
+        
+        
+    );
 
-    // Alice sends 3 messages
-    let (h1, c1) = alice.ratchet_encrypt(b"M1", &[]).expect("encrypt 1");
-    let (h2, c2) = alice.ratchet_encrypt(b"M2", &[]).expect("encrypt 2");
-    let (h3, c3) = alice.ratchet_encrypt(b"M3", &[]).expect("encrypt 3");
+    // Sender sends 3 messages
+    let (sender, h1, c1) = encrypt(sender, b"M1", &[]).expect("encrypt 1");
+    let (sender, h2, c2) = encrypt(sender, b"M2", &[]).expect("encrypt 2");
+    let (_sender, h3, c3) = encrypt(sender, b"M3", &[]).expect("encrypt 3");
 
-    // Bob receives 2, then 3, then 1 (Skipped handling)
+    // Receiver receives 2, then 3, then 1 (Skipped handling)
     // Recv M2
     // Should skip M1.
-    let d2 = bob.ratchet_decrypt(&h2, &c2, &[]).expect("Decrypt M2");
+    let (receiver, d2) = decrypt(receiver, &h2, &c2, &[]).expect("Decrypt M2");
     assert_eq!(d2, b"M2");
 
     // Recv M3
     // Should use chain key
-    let d3 = bob.ratchet_decrypt(&h3, &c3, &[]).expect("Decrypt M3");
+    let (receiver, d3) = decrypt(receiver, &h3, &c3, &[]).expect("Decrypt M3");
     assert_eq!(d3, b"M3");
 
     // Recv M1
     // Should check mkskipped
-    let d1 = bob
-        .ratchet_decrypt(&h1, &c1, &[])
-        .expect("Decrypt M1 from buffer");
+    let (_receiver, d1) = decrypt(receiver, &h1, &c1, &[]).expect("Decrypt M1 from buffer");
     assert_eq!(d1, b"M1");
 }

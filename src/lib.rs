@@ -10,6 +10,7 @@
 //! * `utils` - Utility functions for curve operations and key conversions.
 //! * `hashes` - Cryptographic hash function abstractions.
 
+pub mod ffi;
 pub mod hashes;
 pub mod ratchet;
 pub mod utils;

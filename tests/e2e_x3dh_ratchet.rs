@@ -1,170 +1,243 @@
 use libsignal_dezire::{
-    ratchet::DoubleRatchet,
+    ratchet::{decrypt, encrypt, init_receiver_state, init_sender_state},
     utils::encode_public_key,
-    vxeddsa::{VXEdDSAOutput, gen_keypair, vxeddsa_sign},
-    x3dh::{X3DHInitOutput, x3dh_initiator, x3dh_responder},
+    vxeddsa::{gen_keypair, vxeddsa_sign, vxeddsa_verify},
+    x3dh::{OneTimePreKey, PreKeyBundle, SignedPreKey, x3dh_initiator, x3dh_responder},
 };
 
 use x25519_dalek::{PublicKey, StaticSecret};
 
+/// Simulates the wire format of a Signal "Initial Message"
+///
+/// Contains:
+/// 1. Unencrypted X3DH public keys and IDs (so Bob can reconstruct the shared secret)
+/// 2. Encrypted Double Ratchet Header
+/// 3. Encrypted Payload
+struct SignalInitialMessage {
+    // --- Unencrypted X3DH "Ingredients" ---
+    pub sender_identity_key: [u8; 32],  // IK_A
+    pub sender_ephemeral_key: [u8; 32], // EK_A
+    pub prekey_id: u32,
+    pub onetime_prekey_id: Option<u32>,
+
+    // --- Encrypted Double Ratchet Parts ---
+    pub header: Vec<u8>,     // Encrypted Header
+    pub ciphertext: Vec<u8>, // Encrypted Payload
+}
+
 #[test]
-fn test_e2e_x3dh_double_ratchet_integration() {
+fn test_e2e_signal_initial_message_flow() {
     // =========================================================================
-    // PART 1: X3DH Key Agreement
+    // PART 1: PRE-HANDSHAKE SETUP (Server / Bob publish)
     // =========================================================================
 
-    // 1. Setup Bob's Identity and Prekeys
+    // 1. Setup Bob's Identity (IK_B)
     let bob_identity_keypair = gen_keypair();
     let bob_identity_private = bob_identity_keypair.secret;
     let bob_identity_public = bob_identity_keypair.public;
 
-    // Bob's Signed Prekey (SPK)
+    // 2. Bob's Signed Prekey (SPK_B)
     let bob_spk_keypair = gen_keypair();
     let bob_spk_private = bob_spk_keypair.secret;
     let bob_spk_public = bob_spk_keypair.public;
+    let bob_spk_id = 1;
 
-    // Bob signs the SPK
-    let mut encoded_spk = [0u8; 33];
-    encode_public_key(&bob_spk_public, encoded_spk.as_mut_ptr());
-    let mut sig_output = VXEdDSAOutput {
-        signature: [0u8; 96],
-        vrf: [0u8; 32],
-    };
-    vxeddsa_sign(
-        &bob_identity_private,
-        encoded_spk.as_ptr(),
-        encoded_spk.len(),
-        &mut sig_output,
-    );
+    // Sign SPK
+    let encoded_spk = encode_public_key(&bob_spk_public);
+    let sig_output = vxeddsa_sign(&bob_identity_private, &encoded_spk).expect("Signing failed");
     let spk_sig = sig_output.signature;
 
-    // Bob's One-Time Prekey (OPK) - Optional but good for full test
+    // 3. Bob's One-Time Prekey (OPK_B)
     let bob_opk_keypair = gen_keypair();
     let bob_opk_private = bob_opk_keypair.secret;
     let bob_opk_public = bob_opk_keypair.public;
+    let bob_opk_id = 1;
 
-    // 2. Setup Alice's Identity
-    let alice_identity_keypair = gen_keypair();
-    let alice_identity_private = alice_identity_keypair.secret;
-    let alice_identity_public = alice_identity_keypair.public;
-
-    // 3. Alice runs X3DH Initiator
-    let mut alice_x3dh_out = X3DHInitOutput {
-        shared_secret: [0u8; 32],
-        ephemeral_public: [0u8; 32],
-        status: -99,
+    // 4. Bob "Uploads" Bundle to Server
+    let bundle = PreKeyBundle {
+        identity_key: bob_identity_public,
+        signed_prekey: SignedPreKey {
+            id: bob_spk_id,
+            public_key: bob_spk_public,
+            signature: spk_sig,
+        },
+        one_time_prekey: Some(OneTimePreKey {
+            id: bob_opk_id,
+            public_key: bob_opk_public,
+        }),
     };
 
-    let status = x3dh_initiator(
-        &alice_identity_private,
-        &bob_identity_public,
-        1, // info string length or similar (dummy here as logic is internal?) Check usage in x3dh_test
-        &bob_spk_public,
-        &spk_sig,
-        1, // One-Time Prekey ID/Selector
-        &bob_opk_public as *const u8,
-        true, // use_opk
-        &mut alice_x3dh_out,
-    );
-    assert_eq!(status, 0, "Alice X3DH initiation failed");
+    // =========================================================================
+    // PART 2: SENDING INITIAL MESSAGE (Alice / Client A)
+    // =========================================================================
 
-    let alice_sk = alice_x3dh_out.shared_secret;
-    let alice_ek_public = alice_x3dh_out.ephemeral_public;
+    // 1. Setup Alice's Identity
+    let alice_identity_keypair = gen_keypair();
+    let alice_identity_private = alice_identity_keypair.secret;
+    // Alice's public identity key will be sent in the clear
 
-    // 4. Bob runs X3DH Responder
-    let mut bob_sk = [0u8; 32];
-    let status = x3dh_responder(
+    // 1b. Alice verifies Bob's Signed PreKey Signature
+    let encoded_spk_verify = encode_public_key(&bundle.signed_prekey.public_key);
+    vxeddsa_verify(
+        &bundle.identity_key,
+        &encoded_spk_verify,
+        &bundle.signed_prekey.signature,
+    )
+    .expect("Bob's SPK signature verification failed!");
+
+    // 2. Alice runs X3DH Initiator
+    // This generates her Ephemeral Key (EK_A) and the Shared Secret (SK)
+    let alice_result =
+        x3dh_initiator(&alice_identity_private, &bundle).expect("Alice X3DH initiation failed");
+
+    let alice_sk = alice_result.shared_secret;
+
+    // 3. Alice initializes her Ratchet Session
+    // Note: Header keys are now derived internally from the shared secret using HKDF
+    // The init function uses proper context separation per Signal spec
+    let bob_initial_ratchet_key = PublicKey::from(bob_spk_public);
+
+    let alice_ratchet = init_sender_state(alice_sk, bob_initial_ratchet_key).unwrap();
+
+    // 5. Construct Associated Data (consistent for entire session)
+    // Format: IK_A || IK_B || session_version
+    let mut session_ad = Vec::new();
+    session_ad.extend_from_slice(&alice_identity_keypair.public); // IK_A
+    session_ad.extend_from_slice(&bob_identity_public); // IK_B
+    session_ad.extend_from_slice(b"v1"); // Version/Context
+
+    // 6. Alice Encrypts Initial Message
+    let msg_plaintext = b"Hello Bob! This is an initial message.";
+    let (alice_ratchet, enc_header, ciphertext) =
+        encrypt(alice_ratchet, msg_plaintext, &session_ad).expect("Alice encrypt failed");
+
+    // 7. Alice CONSTRUCTS the Wire Message
+    let initial_message = SignalInitialMessage {
+        sender_identity_key: alice_identity_keypair.public,
+        sender_ephemeral_key: alice_result.ephemeral_public,
+        prekey_id: bob_spk_id,
+        onetime_prekey_id: Some(bob_opk_id),
+        header: enc_header,
+        ciphertext: ciphertext,
+    };
+
+    // NETWORK TRANSMISSION ---> (Message sent to Bob)
+
+    // =========================================================================
+    // PART 3: RECEIVING INITIAL MESSAGE (Bob / Client B)
+    // =========================================================================
+
+    // 1. Bob receives the `initial_message` struct.
+    // He uses the IDs to look up his keys (simulated check)
+    assert_eq!(initial_message.prekey_id, bob_spk_id);
+    assert_eq!(initial_message.onetime_prekey_id, Some(bob_opk_id));
+
+    // 2. Bob runs X3DH Responder
+    let bob_sk = x3dh_responder(
         &bob_identity_private,
         &bob_spk_private,
-        &bob_opk_private as *const u8,
-        true,
-        &alice_identity_public,
-        &alice_ek_public,
-        &mut bob_sk as *mut [u8; 32],
-    );
-    assert_eq!(status, 0, "Bob X3DH response failed");
+        Some(&bob_opk_private),
+        &initial_message.sender_identity_key,
+        &initial_message.sender_ephemeral_key,
+    )
+    .expect("Bob X3DH response failed");
 
-    // 5. Verify Connected
-    assert_eq!(alice_sk, bob_sk, "Shared secrets do not match!");
-
-    // =========================================================================
-    // PART 2: Double Ratchet Session Setup with Header Encryption
-    // =========================================================================
-
-    // Convert raw byte arrays to x25519_dalek types where needed for Ratchet API
-    let bob_dh_public_obj = PublicKey::from(bob_spk_public);
-    let bob_dh_private_obj = StaticSecret::from(bob_spk_private);
-
-    // Derive header encryption keys from the shared secret
-    // In a real implementation, these would be derived from X3DH using KDF
-    // For this test, we'll use simple derivation
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(&alice_sk);
-    hasher.update(b"header-key-alice");
-    let shared_hka: [u8; 32] = hasher.finalize().into();
-
-    let mut hasher = Sha256::new();
-    hasher.update(&alice_sk);
-    hasher.update(b"header-key-bob");
-    let shared_nhkb: [u8; 32] = hasher.finalize().into();
-
-    // Alice Initialize
-    // She needs the Shared Secret (alice_sk), Bob's SPK Public Key, and header encryption keys
-    let mut alice_ratchet =
-        DoubleRatchet::new_alice(alice_sk, bob_dh_public_obj, shared_hka, shared_nhkb);
-
-    // Bob Initialize
-    // He needs the Shared Secret (bob_sk), His SPK Keypair, and header encryption keys
-    let mut bob_ratchet = DoubleRatchet::new_bob(
-        bob_sk,
-        (bob_dh_private_obj, bob_dh_public_obj),
-        shared_hka,
-        shared_nhkb,
+    // VERIFY: The shared secrets must match exactly
+    assert_eq!(
+        alice_sk, bob_sk,
+        "Shared secrets derived from X3DH do not match!"
     );
 
+    // 3. Bob initializes his Ratchet Session
+    // Note: Header keys are now derived internally from the shared secret using HKDF
+    let bob_initial_ratchet_pair = (
+        StaticSecret::from(bob_spk_private),
+        PublicKey::from(bob_spk_public),
+    );
+
+    let bob_ratchet = init_receiver_state(bob_sk, bob_initial_ratchet_pair);
+
+    // 4. Bob Decrypts the Initial Message
+    let (bob_ratchet, decrypted_plaintext) = decrypt(
+        bob_ratchet,
+        &initial_message.header,
+        &initial_message.ciphertext,
+        &session_ad,
+    )
+    .expect("Bob failed to decrypt initial message");
+
+    assert_eq!(decrypted_plaintext, msg_plaintext);
+
     // =========================================================================
-    // PART 3: Encrypted Chat
+    // PART 4: MULTI-ROUND CONVERSATION (Real-world scenario)
     // =========================================================================
 
-    // 1. Alice sends message to Bob
-    let msg1 = b"Hello Bob! This is our secure channel.";
-    let ad1 = b"metadata-1";
+    // Bob replies (triggers DH ratchet)
+    let reply1 = b"Hi Alice! Channel established.";
+    let (bob_ratchet, reply1_header, reply1_cipher) =
+        encrypt(bob_ratchet, reply1, &session_ad).expect("Bob reply 1 failed");
 
-    let (header1, ciphertext1) = alice_ratchet.ratchet_encrypt(msg1, ad1).expect("encrypt 1");
+    // Alice decrypts Bob's reply
+    let (alice_ratchet, reply1_decrypted) =
+        decrypt(alice_ratchet, &reply1_header, &reply1_cipher, &session_ad)
+            .expect("Alice decrypt reply 1 failed");
+    assert_eq!(reply1_decrypted, reply1);
+
+    // Alice sends another message
+    let alice_msg2 = b"Great! How are you?";
+    let (alice_ratchet, alice2_header, alice2_cipher) =
+        encrypt(alice_ratchet, alice_msg2, &session_ad).expect("Alice msg 2 failed");
 
     // Bob decrypts
-    let plaintext1 = bob_ratchet
-        .ratchet_decrypt(&header1, &ciphertext1, ad1)
-        .expect("Bob failed to decrypt message 1");
-    assert_eq!(plaintext1, msg1);
+    let (bob_ratchet, alice2_decrypted) =
+        decrypt(bob_ratchet, &alice2_header, &alice2_cipher, &session_ad)
+            .expect("Bob decrypt alice 2 failed");
+    assert_eq!(alice2_decrypted, alice_msg2);
 
-    // 2. Bob replies to Alice
-    let msg2 = b"Hi Alice! Secure channel confirmed.";
-    let ad2 = b"metadata-2";
+    // Bob sends multiple messages in a row (same sending chain)
+    let bob_msg2 = b"I'm doing well!";
+    let (bob_ratchet, bob2_header, bob2_cipher) =
+        encrypt(bob_ratchet, bob_msg2, &session_ad).expect("Bob msg 2 failed");
 
-    let (header2, ciphertext2) = bob_ratchet.ratchet_encrypt(msg2, ad2).expect("encrypt 2");
+    let bob_msg3 = b"Thanks for asking.";
+    let (_bob_ratchet, bob3_header, bob3_cipher) =
+        encrypt(bob_ratchet, bob_msg3, &session_ad).expect("Bob msg 3 failed");
 
-    // Alice decrypts
-    let plaintext2 = alice_ratchet
-        .ratchet_decrypt(&header2, &ciphertext2, ad2)
-        .expect("Alice failed to decrypt message 2");
-    assert_eq!(plaintext2, msg2);
+    // =========================================================================
+    // PART 5: OUT-OF-ORDER MESSAGE DELIVERY (Real-world scenario)
+    // =========================================================================
 
-    // 3. Exchange more messages (Ping-Pong to trigger ratchets)
-    let msg3 = b"How are you doing?";
-    let (header3, ciphertext3) = alice_ratchet.ratchet_encrypt(msg3, &[]).expect("encrypt 3");
+    // Simulate network reordering: Alice receives bob_msg3 BEFORE bob_msg2
+    // This should trigger skipped message key storage
 
-    let plaintext3 = bob_ratchet
-        .ratchet_decrypt(&header3, &ciphertext3, &[])
-        .expect("Bob failed to decrypt message 3");
-    assert_eq!(plaintext3, msg3);
+    // Alice receives bob_msg3 first (message #3)
+    let (alice_ratchet, bob3_decrypted) =
+        decrypt(alice_ratchet, &bob3_header, &bob3_cipher, &session_ad)
+            .expect("Alice decrypt bob 3 (out of order) failed");
+    assert_eq!(bob3_decrypted, bob_msg3);
 
-    let msg4 = b"I am doing great, thanks for asking!";
-    let (header4, ciphertext4) = bob_ratchet.ratchet_encrypt(msg4, &[]).expect("encrypt 4");
+    // Alice receives bob_msg2 later (message #2, which was skipped)
+    let (alice_ratchet, bob2_decrypted) =
+        decrypt(alice_ratchet, &bob2_header, &bob2_cipher, &session_ad)
+            .expect("Alice decrypt bob 2 (delayed) failed");
+    assert_eq!(bob2_decrypted, bob_msg2);
 
-    let plaintext4 = alice_ratchet
-        .ratchet_decrypt(&header4, &ciphertext4, &[])
-        .expect("Alice failed to decrypt message 4");
-    assert_eq!(plaintext4, msg4);
+    // =========================================================================
+    // PART 6: DUPLICATE MESSAGE DETECTION (Real-world scenario)
+    // =========================================================================
+
+    // Try to decrypt bob_msg2 again (should fail - already processed)
+    let duplicate_result = decrypt(alice_ratchet, &bob2_header, &bob2_cipher, &session_ad);
+    assert!(
+        duplicate_result.is_err(),
+        "Duplicate message should be rejected"
+    );
+
+    println!("✅ All real-world scenario tests passed!");
+    println!("   - Initial X3DH handshake");
+    println!("   - Multi-round conversation with DH ratchet steps");
+    println!("   - Out-of-order message delivery");
+    println!("   - Skipped message handling");
+    println!("   - Duplicate message detection");
+    println!("   - Consistent associated data usage");
 }
