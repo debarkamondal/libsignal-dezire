@@ -56,9 +56,10 @@ impl X3DHInitOutput {
 /// This is the `extern "C"` entry point that wraps the native Rust API.
 ///
 /// # Safety
-/// - All pointer arguments must be valid and properly aligned
-/// - `output` must point to a valid `X3DHInitOutput` struct
-/// - If `has_opk` is true, `bob_opk_public` must point to a valid 32-byte array
+/// * `identity_private`, `bob_identity_public`, `bob_spk_public`, `bob_spk_signature` must point to valid memory of the correct size (see types).
+/// * `output` must point to a writable `X3DHInitOutput` struct.
+/// * If `has_opk` is true, `bob_opk_public` must point to a valid 32-byte array.
+/// * All pointers must be properly aligned.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn x3dh_initiator_ffi(
     identity_private: &[u8; 32],
@@ -110,9 +111,11 @@ pub unsafe extern "C" fn x3dh_initiator_ffi(
 /// This is the `extern "C"` entry point that wraps the native Rust API.
 ///
 /// # Safety
-/// - All pointer arguments must be valid and properly aligned
-/// - `shared_secret_out` must point to a valid 32-byte array
-/// - If `has_opk` is true, `one_time_prekey_private` must point to a valid 32-byte array
+/// * `identity_private`, `signed_prekey_private` must point to valid 32-byte arrays.
+/// * `alice_identity_public`, `alice_ephemeral_public` must point to valid 32-byte arrays.
+/// * `shared_secret_out` must point to a writable 32-byte array.
+/// * If `has_opk` is true, `one_time_prekey_private` must point to a valid 32-byte array.
+/// * All pointers must be properly aligned.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn x3dh_responder_ffi(
     identity_private: &[u8; 32],

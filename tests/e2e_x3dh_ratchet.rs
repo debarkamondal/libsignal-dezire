@@ -97,7 +97,7 @@ fn test_e2e_signal_initial_message_flow() {
     // The init function uses proper context separation per Signal spec
     let bob_initial_ratchet_key = PublicKey::from(bob_spk_public);
 
-    let alice_ratchet = init_sender_state(alice_sk, bob_initial_ratchet_key).unwrap();
+    let mut alice_ratchet = init_sender_state(alice_sk, bob_initial_ratchet_key).unwrap();
 
     // 5. Construct Associated Data (consistent for entire session)
     // Format: IK_A || IK_B || session_version
@@ -108,8 +108,8 @@ fn test_e2e_signal_initial_message_flow() {
 
     // 6. Alice Encrypts Initial Message
     let msg_plaintext = b"Hello Bob! This is an initial message.";
-    let (alice_ratchet, enc_header, ciphertext) =
-        encrypt(alice_ratchet, msg_plaintext, &session_ad).expect("Alice encrypt failed");
+    let (enc_header, ciphertext) =
+        encrypt(&mut alice_ratchet, msg_plaintext, &session_ad).expect("Alice encrypt failed");
 
     // 7. Alice CONSTRUCTS the Wire Message
     let initial_message = SignalInitialMessage {
@@ -155,11 +155,11 @@ fn test_e2e_signal_initial_message_flow() {
         PublicKey::from(bob_spk_public),
     );
 
-    let bob_ratchet = init_receiver_state(bob_sk, bob_initial_ratchet_pair);
+    let mut bob_ratchet = init_receiver_state(bob_sk, bob_initial_ratchet_pair);
 
     // 4. Bob Decrypts the Initial Message
-    let (bob_ratchet, decrypted_plaintext) = decrypt(
-        bob_ratchet,
+    let decrypted_plaintext = decrypt(
+        &mut bob_ratchet,
         &initial_message.header,
         &initial_message.ciphertext,
         &session_ad,
@@ -174,34 +174,42 @@ fn test_e2e_signal_initial_message_flow() {
 
     // Bob replies (triggers DH ratchet)
     let reply1 = b"Hi Alice! Channel established.";
-    let (bob_ratchet, reply1_header, reply1_cipher) =
-        encrypt(bob_ratchet, reply1, &session_ad).expect("Bob reply 1 failed");
+    let (reply1_header, reply1_cipher) =
+        encrypt(&mut bob_ratchet, reply1, &session_ad).expect("Bob reply 1 failed");
 
     // Alice decrypts Bob's reply
-    let (alice_ratchet, reply1_decrypted) =
-        decrypt(alice_ratchet, &reply1_header, &reply1_cipher, &session_ad)
-            .expect("Alice decrypt reply 1 failed");
+    let reply1_decrypted = decrypt(
+        &mut alice_ratchet,
+        &reply1_header,
+        &reply1_cipher,
+        &session_ad,
+    )
+    .expect("Alice decrypt reply 1 failed");
     assert_eq!(reply1_decrypted, reply1);
 
     // Alice sends another message
     let alice_msg2 = b"Great! How are you?";
-    let (alice_ratchet, alice2_header, alice2_cipher) =
-        encrypt(alice_ratchet, alice_msg2, &session_ad).expect("Alice msg 2 failed");
+    let (alice2_header, alice2_cipher) =
+        encrypt(&mut alice_ratchet, alice_msg2, &session_ad).expect("Alice msg 2 failed");
 
     // Bob decrypts
-    let (bob_ratchet, alice2_decrypted) =
-        decrypt(bob_ratchet, &alice2_header, &alice2_cipher, &session_ad)
-            .expect("Bob decrypt alice 2 failed");
+    let alice2_decrypted = decrypt(
+        &mut bob_ratchet,
+        &alice2_header,
+        &alice2_cipher,
+        &session_ad,
+    )
+    .expect("Bob decrypt alice 2 failed");
     assert_eq!(alice2_decrypted, alice_msg2);
 
     // Bob sends multiple messages in a row (same sending chain)
     let bob_msg2 = b"I'm doing well!";
-    let (bob_ratchet, bob2_header, bob2_cipher) =
-        encrypt(bob_ratchet, bob_msg2, &session_ad).expect("Bob msg 2 failed");
+    let (bob2_header, bob2_cipher) =
+        encrypt(&mut bob_ratchet, bob_msg2, &session_ad).expect("Bob msg 2 failed");
 
     let bob_msg3 = b"Thanks for asking.";
-    let (_bob_ratchet, bob3_header, bob3_cipher) =
-        encrypt(bob_ratchet, bob_msg3, &session_ad).expect("Bob msg 3 failed");
+    let (bob3_header, bob3_cipher) =
+        encrypt(&mut bob_ratchet, bob_msg3, &session_ad).expect("Bob msg 3 failed");
 
     // =========================================================================
     // PART 5: OUT-OF-ORDER MESSAGE DELIVERY (Real-world scenario)
@@ -211,15 +219,13 @@ fn test_e2e_signal_initial_message_flow() {
     // This should trigger skipped message key storage
 
     // Alice receives bob_msg3 first (message #3)
-    let (alice_ratchet, bob3_decrypted) =
-        decrypt(alice_ratchet, &bob3_header, &bob3_cipher, &session_ad)
-            .expect("Alice decrypt bob 3 (out of order) failed");
+    let bob3_decrypted = decrypt(&mut alice_ratchet, &bob3_header, &bob3_cipher, &session_ad)
+        .expect("Alice decrypt bob 3 (out of order) failed");
     assert_eq!(bob3_decrypted, bob_msg3);
 
     // Alice receives bob_msg2 later (message #2, which was skipped)
-    let (alice_ratchet, bob2_decrypted) =
-        decrypt(alice_ratchet, &bob2_header, &bob2_cipher, &session_ad)
-            .expect("Alice decrypt bob 2 (delayed) failed");
+    let bob2_decrypted = decrypt(&mut alice_ratchet, &bob2_header, &bob2_cipher, &session_ad)
+        .expect("Alice decrypt bob 2 (delayed) failed");
     assert_eq!(bob2_decrypted, bob_msg2);
 
     // =========================================================================
@@ -227,7 +233,7 @@ fn test_e2e_signal_initial_message_flow() {
     // =========================================================================
 
     // Try to decrypt bob_msg2 again (should fail - already processed)
-    let duplicate_result = decrypt(alice_ratchet, &bob2_header, &bob2_cipher, &session_ad);
+    let duplicate_result = decrypt(&mut alice_ratchet, &bob2_header, &bob2_cipher, &session_ad);
     assert!(
         duplicate_result.is_err(),
         "Duplicate message should be rejected"

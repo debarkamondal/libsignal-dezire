@@ -1,3 +1,12 @@
+//! # X3DH Key Agreement Protocol
+//!
+//! This module implements the "Extended Triple Diffie-Hellman" (X3DH) key agreement protocol.
+//! X3DH establishes a shared secret key between two parties who mutually authenticate each other
+//! based on public keys.
+//!
+//! ## Specification
+//! See [X3DH Key Agreement Protocol](https://signal.org/docs/specifications/x3dh/).
+
 use sha2::Sha512;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
@@ -16,11 +25,14 @@ pub type X3DHPublicKey = [u8; 32];
 pub type X3DHPrivateKey = [u8; 32];
 
 /// Represents a Signed Prekey (Public Part).
+///
+/// Published by Bob, signed by his Identity Key.
 #[derive(Clone, Debug)]
 pub struct SignedPreKey {
     pub id: u32,
     pub public_key: X3DHPublicKey,
-    pub signature: [u8; 96], // VXEdDSA signature is 96 bytes (64 sig + 32 vrf)
+    /// VXEdDSA signature (64 bytes signature + 32 bytes VRF).
+    pub signature: [u8; 96],
 }
 
 /// Represents a One-Time Prekey (Public Part).
@@ -30,7 +42,9 @@ pub struct OneTimePreKey {
     pub public_key: X3DHPublicKey,
 }
 
-/// Represents a PreKey Bundle that Bob publishes.
+/// Represents a PreKey Bundle that Bob publishes to the server.
+///
+/// Alice fetches this bundle to establish a session with Bob.
 #[derive(Clone, Debug)]
 pub struct PreKeyBundle {
     pub identity_key: X3DHPublicKey,
@@ -59,7 +73,7 @@ pub struct X3DHInitResult {
 
 /// KDF as defined in X3DH: HKDF using SHA-512.
 /// Inputs: F || KM. F = 32 bytes of 0xFF (for X25519).
-pub fn kdf(km: &[u8]) -> [u8; 32] {
+pub(crate) fn kdf(km: &[u8]) -> [u8; 32] {
     let mut input_key_material = Vec::with_capacity(32 + km.len());
     input_key_material.extend_from_slice(&[0xFF; 32]);
     input_key_material.extend_from_slice(km);
@@ -83,7 +97,7 @@ fn dh(private: &X3DHPrivateKey, public_key_bytes: &X3DHPublicKey) -> [u8; 32] {
 }
 
 /// Generate an ephemeral keypair for X3DH.
-pub fn generate_ephemeral_keypair() -> (X3DHPrivateKey, X3DHPublicKey) {
+pub(crate) fn generate_ephemeral_keypair() -> (X3DHPrivateKey, X3DHPublicKey) {
     let private = gen_secret();
     let public = gen_pubkey(&private);
     (private, public)
@@ -95,16 +109,17 @@ pub fn generate_ephemeral_keypair() -> (X3DHPrivateKey, X3DHPublicKey) {
 
 /// Alice (Initiator) performs the X3DH key agreement.
 ///
-/// This is the memory-safe native Rust API that uses proper Result types
-/// and references instead of raw pointers.
+/// Implements the logic for Alice to calculate the shared secret key using Bob's prekey bundle.
+///
+/// See [X3DH Spec Section 3.3](https://signal.org/docs/specifications/x3dh/#sending-the-initial-message).
 ///
 /// # Arguments
-/// * `identity_private` - Alice's identity private key
-/// * `bundle` - Bob's prekey bundle
+/// * `identity_private` - Alice's identity private key.
+/// * `bundle` - Bob's prekey bundle.
 ///
 /// # Returns
-/// * `Ok(X3DHInitResult)` - Shared secret and ephemeral public key
-/// * `Err(X3DHError)` - If signature verification or key validation fails
+/// * `Ok(X3DHInitResult)` - Shared secret and ephemeral public key.
+/// * `Err(X3DHError)` - If signature verification or key validation fails.
 pub fn x3dh_initiator(
     identity_private: &X3DHPrivateKey,
     bundle: &PreKeyBundle,
@@ -160,7 +175,6 @@ pub fn x3dh_initiator(
     // 4. KDF(DH1 || DH2 || DH3 [|| DH4])
     let shared_secret = kdf(&chained_key_material);
 
-    // Zeroize sensitive key material
     ephemeral_private.zeroize();
     dh1.zeroize();
     dh2.zeroize();
@@ -178,18 +192,20 @@ pub fn x3dh_initiator(
 
 /// Bob (Responder) performs the X3DH key agreement.
 ///
-/// This is the memory-safe native Rust API.
+/// Calculates the shared secret using Alice's public keys and Bob's private keys.
+///
+/// See [X3DH Spec Section 3.4](https://signal.org/docs/specifications/x3dh/#receiving-the-initial-message).
 ///
 /// # Arguments
-/// * `identity_private` - Bob's identity private key
-/// * `signed_prekey_private` - Bob's signed prekey private key
-/// * `one_time_prekey_private` - Bob's one-time prekey private key (optional)
-/// * `alice_identity_public` - Alice's identity public key
-/// * `alice_ephemeral_public` - Alice's ephemeral public key
+/// * `identity_private` - Bob's identity private key.
+/// * `signed_prekey_private` - Bob's signed prekey private key.
+/// * `one_time_prekey_private` - Bob's one-time prekey private key (optional).
+/// * `alice_identity_public` - Alice's identity public key.
+/// * `alice_ephemeral_public` - Alice's ephemeral public key.
 ///
 /// # Returns
-/// * `Ok([u8; 32])` - The shared secret
-/// * `Err(X3DHError)` - If key validation fails
+/// * `Ok([u8; 32])` - The shared secret.
+/// * `Err(X3DHError)` - If key validation fails.
 pub fn x3dh_responder(
     identity_private: &X3DHPrivateKey,
     signed_prekey_private: &X3DHPrivateKey,
@@ -223,7 +239,6 @@ pub fn x3dh_responder(
     // 2. KDF
     let shared_secret = kdf(&chained_key_material);
 
-    // Zeroize sensitive key material
     dh1.zeroize();
     dh2.zeroize();
     dh3.zeroize();

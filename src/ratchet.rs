@@ -1,3 +1,14 @@
+//! # Double Ratchet Algorithm
+//!
+//! This module implements the Double Ratchet key management algorithm, which provides
+//! cryptographic guarantees for instant messaging:
+//! * **Confidentiality**: Messages are encrypted.
+//! * **Authenticity**: Messages are authenticated.
+//! * **Forward Secrecy**: Compromise of current keys does not reveal past keys.
+//! * **break-in Recovery**: Post-compromise security (future secrecy).
+//!
+//! ## Specification
+//! This implementation follows the [Signal Double Ratchet Algorithm](https://signal.org/docs/specifications/doubleratchet/).
 use aes::Aes256;
 use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use aes_gcm::{
@@ -12,18 +23,28 @@ use subtle::ConstantTimeEq;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-/// Error types for Ratchet operations
+/// Error types for Double Ratchet operations.
 #[derive(Debug, PartialEq)]
 pub enum RatchetError {
+    /// The provided key was invalid or missing.
     InvalidKey,
+    /// Decryption of the message or header failed (authentication failure).
     DecryptionFailed,
+    /// The message key was too old and has been discarded (max skip limit reached).
     OldMessageKeysLimitReached,
+    /// The message has already been received and processed.
     DuplicateMessage,
+    /// The message header was invalid or malformed.
     InvalidHeader,
+    /// Failed to decrypt the message header.
     HeaderDecryptionFailed,
+    /// A counter (message number) overflowed its limit.
     CounterOverflow,
+    /// The associated data was too large to process.
     ADTooLarge,
+    /// The session state is invalid (e.g. missing required keys).
     InvalidState,
+    /// Too many messages received in this session (replay protection limit).
     TooManyMessages,
 }
 
@@ -34,7 +55,7 @@ pub enum RatchetError {
 const MAX_SKIP: u32 = 1000;
 const MAX_SKIPPED_KEYS: usize = 2000;
 const MAX_AD_SIZE: usize = 64 * 1024; // 64KB
-const MAX_RECEIVED_TRACKING: usize = 10000; // Limit replay tracking (HIGH-2)
+const MAX_RECEIVED_TRACKING: usize = 10000;
 const HKDF_INFO_ROOT: &[u8] = b"Signal-DoubleRatchet-Root";
 
 // ----------------------------------------------------------------------------
@@ -52,12 +73,17 @@ pub struct SkippedKey {
     pub timestamp: std::time::Instant,
 }
 
-/// The Header sent with every message (unencrypted form)
+/// The Header sent with every message (unencrypted form).
+///
+/// See [Double Ratchet Spec Section 3.5](https://signal.org/docs/specifications/doubleratchet/#header-encryption).
 #[derive(Clone, Debug, PartialEq)]
 pub struct RatchetHeader {
+    /// The sender's current Diffie-Hellman public key.
     pub dh_pub: DhPublicKey,
-    pub pn: u32, // Previous chain length
-    pub n: u32,  // Message number in current chain
+    /// The number of the previous sending chain.
+    pub pn: u32,
+    /// The message number in the current chain.
+    pub n: u32,
 }
 
 impl RatchetHeader {
@@ -97,7 +123,12 @@ impl RatchetHeader {
 // Core State Structure
 // ----------------------------------------------------------------------------
 
-/// The Double Ratchet Session State (externally managed)
+/// The Double Ratchet Session State.
+///
+/// This structure holds all the state required for a Double Ratchet session, including
+/// the Root Key (RK), Chain Keys (CKs), and Ratchet Diffie-Hellman keys.
+///
+/// See [Double Ratchet Spec Section 3.2](https://signal.org/docs/specifications/doubleratchet/#cryptographic-properties).
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct RatchetState {
     // Diffie-Hellman Ratchet
@@ -148,8 +179,9 @@ pub struct RatchetState {
 // State Initialization Functions
 // ----------------------------------------------------------------------------
 
-/// Initialize sender's session state with header encryption
-/// Header keys are derived internally from the shared secret
+/// Initialize sender's session state with header encryption.
+///
+/// Header keys are derived internally from the shared secret.
 pub fn init_sender_state(
     sk: [u8; 32],
     receiver_dh_public_key: DhPublicKey,
@@ -184,8 +216,9 @@ pub fn init_sender_state(
     })
 }
 
-/// Initialize receiver's session state with header encryption
-/// Header keys are derived internally from the shared secret
+/// Initialize receiver's session state with header encryption.
+///
+/// Header keys are derived internally from the shared secret.
 pub fn init_receiver_state(sk: [u8; 32], receiver_key_pair: KeyPair) -> RatchetState {
     // Derive header keys from shared secret
     let (initiator_hk, responder_hk) = derive_header_keys(&sk);
@@ -214,17 +247,23 @@ pub fn init_receiver_state(sk: [u8; 32], receiver_key_pair: KeyPair) -> RatchetS
 // Core Encryption/Decryption Functions (Pure, State-returning)
 // ----------------------------------------------------------------------------
 
-/// Encrypt a message with header encryption
-/// Returns (new_state, encrypted_header, ciphertext)
+/// Encrypt a message with header encryption.
+///
+/// Returns (new_state, encrypted_header, ciphertext).
+/// Encrypt a message with header encryption.
+///
+/// Returns (encrypted_header, ciphertext).
+/// Encrypt a message with header encryption.
+///
+/// Returns (encrypted_header, ciphertext).
 pub fn encrypt(
-    mut state: RatchetState,
+    state: &mut RatchetState,
     plaintext: &[u8],
     associated_data: &[u8],
-) -> Result<(RatchetState, Vec<u8>, Vec<u8>), RatchetError> {
-    // Validate state before encryption (MEDIUM-2 fix)
-    validate_encryption_state(&state)?;
+) -> Result<(Vec<u8>, Vec<u8>), RatchetError> {
+    // Validate state before encryption.
+    validate_encryption_state(state)?;
 
-    // Validate input sizes (LOW-1 fix)
     if associated_data.len() > MAX_AD_SIZE {
         return Err(RatchetError::ADTooLarge);
     }
@@ -240,34 +279,39 @@ pub fn encrypt(
         n: state.ns,
     };
 
-    // Check for counter overflow (MEDIUM-1 fix)
+    // Check for counter overflow.
     state.ns = state
         .ns
         .checked_add(1)
         .ok_or(RatchetError::CounterOverflow)?;
 
     // Encrypt header
-    let (new_nonce_counter, enc_header) = encrypt_header(&state, &header)?;
+    let (new_nonce_counter, enc_header) = encrypt_header(state, &header)?;
     state.header_nonce_counter = new_nonce_counter;
 
-    // Encrypt message with AD = concat(associated_data, encrypted_header)
     let ad = concat_ad(associated_data, &enc_header);
     let ciphertext = encrypt_aead(&mk, plaintext, &ad)?;
 
-    mk.zeroize(); // LOW-2: Zeroize message key after use
+    mk.zeroize();
 
-    Ok((state, enc_header, ciphertext))
+    Ok((enc_header, ciphertext))
 }
 
-/// Decrypt a message with header encryption (ATOMIC)
-/// Returns (new_state, plaintext)
+/// Decrypt a message with header encryption.
+///
+/// Returns (new_state, plaintext).
+/// Decrypt a message with header encryption.
+///
+/// Returns plaintext.
+/// Decrypt a message with header encryption.
+///
+/// Returns plaintext.
 pub fn decrypt(
-    mut state: RatchetState,
+    state: &mut RatchetState,
     enc_header: &[u8],
     ciphertext: &[u8],
     associated_data: &[u8],
-) -> Result<(RatchetState, Vec<u8>), RatchetError> {
-    // Validate input sizes (LOW-1 fix)
+) -> Result<Vec<u8>, RatchetError> {
     if associated_data.len() > MAX_AD_SIZE {
         return Err(RatchetError::ADTooLarge);
     }
@@ -281,36 +325,36 @@ pub fn decrypt(
     state.mkskipped = mkskipped_ret;
 
     if let Some(plaintext) = result {
-        return Ok((state, plaintext));
+        return Ok(plaintext);
     }
 
     // 2. Decrypt header
-    let (header, dh_ratchet) = decrypt_header(&state, enc_header)?;
+    let (header, dh_ratchet) = decrypt_header(state, enc_header)?;
 
-    // 3. Check for duplicate message (CRITICAL-3 fix)
+    // 3. Check for duplicate message.
     let msg_id = (header.dh_pub.to_bytes(), header.n);
     if state.received_messages.contains(&msg_id) {
         return Err(RatchetError::DuplicateMessage);
     }
 
     // 4. Compute the message key WITHOUT modifying state
-    let mut mk = compute_message_key(&state, &header, dh_ratchet)?;
+    let mut mk = compute_message_key(state, &header, dh_ratchet)?;
 
     // 5. Attempt decryption - this is the authentication step
     let plaintext = decrypt_aead(&mk, ciphertext, &ad)?;
 
-    mk.zeroize(); // LOW-2: Zeroize message key after use
+    mk.zeroize();
 
     // 6. SUCCESS - Now commit state changes atomically
-    state = commit_state_changes(state, &header, dh_ratchet)?;
+    commit_state_changes(state, &header, dh_ratchet)?;
 
-    // 7. Track this message to prevent replay (HIGH-2: with limit)
+    // 7. Track this message to prevent replay.
     if state.received_messages.len() >= MAX_RECEIVED_TRACKING {
         return Err(RatchetError::TooManyMessages);
     }
     state.received_messages.insert(msg_id);
 
-    Ok((state, plaintext))
+    Ok(plaintext)
 }
 
 // ----------------------------------------------------------------------------
@@ -391,7 +435,7 @@ fn compute_message_key(
         let dh_out = state.dh_pair.0.diffie_hellman(&header.dh_pub);
         let mut dh_bytes = *dh_out.as_bytes();
         let (_, new_ck_r, _) = kdf_rk_he(&state.rk, &dh_bytes)?;
-        dh_bytes.zeroize(); // MEDIUM-4: Zeroize DH output
+        dh_bytes.zeroize();
         ck_r = Some(new_ck_r);
         nr = 0;
     }
@@ -406,24 +450,26 @@ fn compute_message_key(
     while nr < header.n {
         let mut old_ck = current_ck;
         let (next_ck, _) = kdf_ck(&current_ck);
-        old_ck.zeroize(); // MEDIUM-4: Zeroize before overwrite
+        old_ck.zeroize();
         current_ck = next_ck;
         nr += 1;
     }
 
     // Derive message key
     let (_, mk) = kdf_ck(&current_ck);
-    current_ck.zeroize(); // MEDIUM-4: Zeroize final key
+    current_ck.zeroize();
     Ok(mk)
 }
 
 /// Commit state changes after successful decryption (ATOMIC)
 /// Returns new state with all changes applied
+/// Commit state changes after successful decryption (ATOMIC)
+/// Returns new state with all changes applied
 fn commit_state_changes(
-    mut state: RatchetState,
+    state: &mut RatchetState,
     header: &RatchetHeader,
     dh_ratchet: bool,
-) -> Result<RatchetState, RatchetError> {
+) -> Result<(), RatchetError> {
     if dh_ratchet {
         // Store skipped keys from previous receiving chain
         if let Some(ck_r) = state.ck_r {
@@ -466,7 +512,7 @@ fn commit_state_changes(
         state.nhk_s = new_nhk_s;
         state.dh_pair = (new_dh_s, new_dh_s_pub);
 
-        // Clear received messages after DH ratchet (CRITICAL-3 fix)
+        // Clear received messages after DH ratchet.
         state.received_messages.clear();
     }
 
@@ -487,13 +533,15 @@ fn commit_state_changes(
     let (new_ck_r, _) = kdf_ck(&state.ck_r.expect("Receiving chain key missing"));
     state.ck_r = Some(new_ck_r);
 
-    // Add overflow protection (HIGH-1 fix)
+    state.ck_r = Some(new_ck_r);
+
+    // Add overflow protection.
     state.nr = state
         .nr
         .checked_add(1)
         .ok_or(RatchetError::CounterOverflow)?;
 
-    Ok(state)
+    Ok(())
 }
 
 /// Skip message keys in the current receiving chain
@@ -505,7 +553,7 @@ fn skip_message_keys(
     from: u32,
     to: u32,
 ) -> Result<HashMap<([u8; 32], u32), SkippedKey>, RatchetError> {
-    // Validate range (MEDIUM-2 fix)
+    // Validate range.
     if to < from {
         return Err(RatchetError::InvalidHeader);
     }
@@ -518,7 +566,7 @@ fn skip_message_keys(
 
     let mut current = from;
     while current < to {
-        // Enforce total size limit before adding (CRITICAL-2 fix)
+        // Enforce total size limit before adding.
         if mkskipped.len() >= MAX_SKIPPED_KEYS {
             mkskipped = evict_oldest_skipped_keys(mkskipped, MAX_SKIPPED_KEYS / 2);
         }
@@ -531,9 +579,10 @@ fn skip_message_keys(
                 timestamp: std::time::Instant::now(),
             },
         );
+
         ck = next_ck;
 
-        // Add overflow protection (HIGH-1 fix)
+        // Add overflow protection.
         current = current
             .checked_add(1)
             .ok_or(RatchetError::CounterOverflow)?;
@@ -541,7 +590,7 @@ fn skip_message_keys(
     Ok(mkskipped)
 }
 
-/// Validate encryption state (MEDIUM-2 fix)
+/// Validate encryption state.
 fn validate_encryption_state(state: &RatchetState) -> Result<(), RatchetError> {
     if state.ck_s.is_none() {
         return Err(RatchetError::InvalidState);
@@ -555,7 +604,7 @@ fn validate_encryption_state(state: &RatchetState) -> Result<(), RatchetError> {
     Ok(())
 }
 
-/// Evict oldest skipped keys to prevent memory exhaustion (CRITICAL-2 fix)
+/// Evict oldest skipped keys to prevent memory exhaustion.
 /// Returns updated mkskipped map
 fn evict_oldest_skipped_keys(
     mut mkskipped: HashMap<([u8; 32], u32), SkippedKey>,
@@ -639,7 +688,7 @@ fn kdf_ck(ck: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
     next_ck.copy_from_slice(&next_ck_bytes);
     mk.copy_from_slice(&mk_bytes);
 
-    // Zeroize intermediates (HIGH-2 fix)
+    // Zeroize intermediates.
     next_ck_bytes.zeroize();
     mk_bytes.zeroize();
 
@@ -655,9 +704,9 @@ fn encrypt_header(
     let hk = state.hk_s.ok_or(RatchetError::InvalidKey)?;
     let plaintext = header.to_bytes();
 
-    // Use stateful counter as nonce with party identifier (CRITICAL-1 fix)
+    // Use stateful counter as nonce with party identifier.
     let nonce_value = state.header_nonce_counter;
-    // Check for overflow (MEDIUM-1 fix)
+    // Check for overflow.
     let new_nonce_counter = nonce_value
         .checked_add(1)
         .ok_or(RatchetError::CounterOverflow)?;
@@ -813,24 +862,23 @@ mod tests {
         let receiver_dh_private = StaticSecret::random_from_rng(&mut rng);
         let receiver_dh_public = PublicKey::from(&receiver_dh_private);
 
-        let sender = init_sender_state(sk, receiver_dh_public).unwrap();
-        let receiver = init_receiver_state(sk, (receiver_dh_private, receiver_dh_public));
+        let mut sender = init_sender_state(sk, receiver_dh_public).unwrap();
+        let mut receiver = init_receiver_state(sk, (receiver_dh_private, receiver_dh_public));
 
         let msg1 = b"Hello Receiver!";
         let ad1 = b"Metadata";
-        let (sender, enc_header1, cipher1) =
-            encrypt(sender, msg1, ad1).expect("Sender encrypts msg1");
+        let (enc_header1, cipher1) = encrypt(&mut sender, msg1, ad1).expect("Sender encrypts msg1");
 
-        let (receiver, decrypted1) =
-            decrypt(receiver, &enc_header1, &cipher1, ad1).expect("Receiver decrypts msg1");
+        let decrypted1 =
+            decrypt(&mut receiver, &enc_header1, &cipher1, ad1).expect("Receiver decrypts msg1");
         assert_eq!(decrypted1, msg1);
 
         let msg2 = b"Hello Sender!";
-        let (_receiver, enc_header2, cipher2) =
-            encrypt(receiver, msg2, &[]).expect("Receiver encrypts msg2");
+        let (enc_header2, cipher2) =
+            encrypt(&mut receiver, msg2, &[]).expect("Receiver encrypts msg2");
 
-        let (_sender, decrypted2) =
-            decrypt(sender, &enc_header2, &cipher2, &[]).expect("Sender decrypts msg2");
+        let decrypted2 =
+            decrypt(&mut sender, &enc_header2, &cipher2, &[]).expect("Sender decrypts msg2");
         assert_eq!(decrypted2, msg2);
     }
 
@@ -842,22 +890,22 @@ mod tests {
         let receiver_dh_private = StaticSecret::random_from_rng(&mut rng);
         let receiver_dh_public = PublicKey::from(&receiver_dh_private);
 
-        let sender = init_sender_state(sk, receiver_dh_public).unwrap();
-        let receiver = init_receiver_state(sk, (receiver_dh_private, receiver_dh_public));
+        let mut sender = init_sender_state(sk, receiver_dh_public).unwrap();
+        let mut receiver = init_receiver_state(sk, (receiver_dh_private, receiver_dh_public));
 
         // Sender sends 3 messages
-        let (sender, h1, c1) = encrypt(sender, b"Message 1", &[]).expect("encrypts 1");
-        let (sender, h2, c2) = encrypt(sender, b"Message 2", &[]).expect("encrypts 2");
-        let (_sender, h3, c3) = encrypt(sender, b"Message 3", &[]).expect("encrypts 3");
+        let (h1, c1) = encrypt(&mut sender, b"Message 1", &[]).expect("encrypts 1");
+        let (h2, c2) = encrypt(&mut sender, b"Message 2", &[]).expect("encrypts 2");
+        let (h3, c3) = encrypt(&mut sender, b"Message 3", &[]).expect("encrypts 3");
 
         // Receiver receives them out of order: 1, 3, 2
-        let (receiver, d1) = decrypt(receiver, &h1, &c1, &[]).expect("Decrypt 1");
+        let d1 = decrypt(&mut receiver, &h1, &c1, &[]).expect("Decrypt 1");
         assert_eq!(d1, b"Message 1");
 
-        let (receiver, d3) = decrypt(receiver, &h3, &c3, &[]).expect("Decrypt 3");
+        let d3 = decrypt(&mut receiver, &h3, &c3, &[]).expect("Decrypt 3");
         assert_eq!(d3, b"Message 3");
 
-        let (_receiver, d2) = decrypt(receiver, &h2, &c2, &[]).expect("Decrypt 2");
+        let d2 = decrypt(&mut receiver, &h2, &c2, &[]).expect("Decrypt 2");
         assert_eq!(d2, b"Message 2");
     }
 
@@ -870,22 +918,22 @@ mod tests {
         let receiver_dh_public = PublicKey::from(&receiver_dh_private);
 
         let mut sender = init_sender_state(sk, receiver_dh_public).unwrap();
-        let receiver = init_receiver_state(sk, (receiver_dh_private, receiver_dh_public));
+        let mut receiver = init_receiver_state(sk, (receiver_dh_private, receiver_dh_public));
 
-        let (new_sender, h1, c1) = encrypt(sender, b"Message 1", &[]).expect("encrypt 1");
-        sender = new_sender;
-        let (receiver, _) = decrypt(receiver, &h1, &c1, &[]).expect("Decrypt 1");
+        let (h1, c1) = encrypt(&mut sender, b"Message 1", &[]).expect("encrypt 1");
+        // sender = new_sender; // Removed
+        let _ = decrypt(&mut receiver, &h1, &c1, &[]).expect("Decrypt 1");
 
         // Sender sends MAX_SKIP + 2 more messages
         for _ in 0..(MAX_SKIP + 2) {
-            let (new_sender, _, _) = encrypt(sender, b"Skip me", &[]).unwrap();
-            sender = new_sender;
+            let (_, _) = encrypt(&mut sender, b"Skip me", &[]).unwrap();
+            // sender = new_sender; // Removed
         }
 
-        let (_, h_final, c_final) = encrypt(sender, b"Final", &[]).expect("encrypt final");
+        let (h_final, c_final) = encrypt(&mut sender, b"Final", &[]).expect("encrypt final");
 
         // Receiver tries to decrypt - should fail due to MAX_SKIP
-        let err = decrypt(receiver, &h_final, &c_final, &[]);
+        let err = decrypt(&mut receiver, &h_final, &c_final, &[]);
         assert!(matches!(err, Err(RatchetError::OldMessageKeysLimitReached)));
     }
 
@@ -897,19 +945,18 @@ mod tests {
         let receiver_dh_private = StaticSecret::random_from_rng(&mut rng);
         let receiver_dh_public = PublicKey::from(&receiver_dh_private);
 
-        let sender = init_sender_state(sk, receiver_dh_public).unwrap();
-        let receiver = init_receiver_state(sk, (receiver_dh_private, receiver_dh_public));
+        let mut sender = init_sender_state(sk, receiver_dh_public).unwrap();
+        let mut receiver = init_receiver_state(sk, (receiver_dh_private, receiver_dh_public));
 
         let msg = b"Tampered";
-        let (_sender, enc_header, mut cipher) =
-            encrypt(sender, msg, &[]).expect("encrypt tampered");
+        let (enc_header, mut cipher) = encrypt(&mut sender, msg, &[]).expect("encrypt tampered");
 
         // Tamper ciphertext
         if !cipher.is_empty() {
             cipher[0] ^= 0xFF;
         }
 
-        let err = decrypt(receiver, &enc_header, &cipher, &[]);
+        let err = decrypt(&mut receiver, &enc_header, &cipher, &[]);
         assert!(matches!(err, Err(RatchetError::DecryptionFailed)));
     }
 }

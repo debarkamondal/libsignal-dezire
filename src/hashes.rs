@@ -1,25 +1,10 @@
 use sha2::{Digest, Sha512};
 
-/// Computes the SHA-512 hash of the input.
-///
-/// This is a standard cryptographic hash function wrapper.
-///
-/// # Arguments
-///
-/// * `x` - The input byte slice to be hashed.
-///
-/// # Returns
-///
-/// A 64-byte array containing the SHA-512 digest.
-pub fn hash(x: &[u8]) -> [u8; 64] {
-    Sha512::digest(x).into()
-}
-
-/// Computes the domain-separated hash `hashi`.
-///
 /// The function calculates `H( ((2^256 - 1) - i) || x )`.
 /// This is used in the VXEdDSA protocol to derive various scalars and points
 /// while ensuring domain separation.
+///
+/// See [XEdDSA Spec](https://signal.org/docs/specifications/xeddsa/#vxeddsa).
 ///
 /// # Arguments
 ///

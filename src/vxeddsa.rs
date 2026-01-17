@@ -1,3 +1,12 @@
+//! # VXEdDSA Signature Scheme
+//!
+//! This module implements the VXEdDSA (Verifiable XEdDSA) signature scheme.
+//! It extends XEdDSA (which allows signing with X25519 DH keys) to include
+//! a Verifiable Random Function (VRF) output.
+//!
+//! ## Specification
+//! See [XEdDSA and VXEdDSA Signature Schemes](https://signal.org/docs/specifications/xeddsa/).
+
 #![allow(non_snake_case)]
 use curve25519_dalek::{edwards::EdwardsPoint, scalar::Scalar};
 use rand_core::OsRng;
@@ -10,6 +19,8 @@ use crate::utils::calculate_key_pair;
 // ============================================================================
 
 /// Represents a key pair containing a 32-byte secret key and a 32-byte public key.
+///
+/// Used for both X25519 DH and VXEdDSA signing (via XEdDSA).
 #[repr(C)]
 pub struct KeyPair {
     /// The 32-byte secret key.
@@ -61,6 +72,8 @@ pub fn gen_pubkey(k: &[u8; 32]) -> [u8; 32] {
 ///
 /// This function implements the signing logic specified in the VXEdDSA protocol (Signal).
 /// It produces a deterministic signature and a proof of randomness (v).
+///
+/// See [XEdDSA Spec](https://signal.org/docs/specifications/xeddsa/#vxeddsa-signing).
 ///
 /// # Arguments
 ///
@@ -145,6 +158,8 @@ pub fn vxeddsa_sign(k: &[u8; 32], message: &[u8]) -> Result<VXEdDSAOutput, ()> {
 }
 
 /// Verifies a VXEdDSA signature.
+///
+/// See [XEdDSA Spec](https://signal.org/docs/specifications/xeddsa/#vxeddsa-verification).
 ///
 /// # Arguments
 ///

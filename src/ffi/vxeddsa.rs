@@ -12,7 +12,11 @@ use crate::vxeddsa::{
 // ============================================================================
 
 /// Generates a random Curve25519 key pair.
+///
 /// Wrapper around [`crate::vxeddsa::gen_keypair`].
+///
+/// # Returns
+/// A `KeyPair` struct containing the secret and public keys.
 #[unsafe(no_mangle)]
 pub extern "C" fn gen_keypair_ffi() -> KeyPair {
     gen_keypair()
@@ -21,7 +25,8 @@ pub extern "C" fn gen_keypair_ffi() -> KeyPair {
 /// Generates a random 32-byte secret key and writes it to the provided buffer.
 ///
 /// # Safety
-/// The caller must ensure that `secret_out` points to a valid, writable 32-byte memory region.
+/// * `secret_out` must be a valid pointer to a writable 32-byte memory region.
+/// * The pointer must be properly aligned.
 #[unsafe(no_mangle)]
 pub extern "C" fn gen_secret_ffi(secret_out: *mut [u8; 32]) {
     let secret = gen_secret();
@@ -33,7 +38,8 @@ pub extern "C" fn gen_secret_ffi(secret_out: *mut [u8; 32]) {
 /// Derives a public key from a given 32-byte secret key.
 ///
 /// # Safety
-/// The caller must ensure that `pubkey` points to a valid, writable 32-byte memory region.
+/// * `k` must be a valid pointer to a readable 32-byte secret key.
+/// * `pubkey` must be a valid pointer to a writable 32-byte memory region.
 #[unsafe(no_mangle)]
 pub extern "C" fn gen_pubkey_ffi(k: &[u8; 32], pubkey: *mut [u8; 32]) {
     let public = gen_pubkey(k);
@@ -44,6 +50,10 @@ pub extern "C" fn gen_pubkey_ffi(k: &[u8; 32], pubkey: *mut [u8; 32]) {
 
 /// Computes a VXEdDSA signature and generates the associated VRF output.
 /// Wrapper around [`crate::vxeddsa::vxeddsa_sign`].
+///
+/// # Safety
+/// * `msg_ptr` must point to a valid memory region of size `msg_len`.
+/// * `output` must point to a writable `VXEdDSAOutput` struct.
 ///
 /// # Returns
 /// * `0` on success.
@@ -72,6 +82,10 @@ pub extern "C" fn vxeddsa_sign_ffi(
 
 /// Verifies a VXEdDSA signature.
 /// Wrapper around [`crate::vxeddsa::vxeddsa_verify`].
+///
+/// # Safety
+/// * `msg_ptr` must point to a valid memory region of size `msg_len`.
+/// * `v_out` can be null. If not null, it must point to a writable 32-byte buffer.
 ///
 /// # Returns
 /// `true` if signature is valid, `false` otherwise.

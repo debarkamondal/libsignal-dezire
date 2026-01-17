@@ -8,7 +8,7 @@ use curve25519_dalek::{
 };
 use subtle::{Choice, ConditionallySelectable};
 
-pub fn is_valid_public_key(pk: &[u8; 32]) -> bool {
+pub(crate) fn is_valid_public_key(pk: &[u8; 32]) -> bool {
     // Reject all-zero
     if pk.iter().all(|&b| b == 0) {
         return false;
@@ -31,7 +31,7 @@ pub fn is_valid_public_key(pk: &[u8; 32]) -> bool {
 }
 
 /// Converts a Montgomery u-coordinate (X25519) to a compressed Edwards point (Ed25519).
-pub fn u_to_y(u: [u8; 32]) -> EdwardsPoint {
+pub(crate) fn u_to_y(u: [u8; 32]) -> EdwardsPoint {
     let montgomery = MontgomeryPoint(u);
     montgomery
         .to_edwards(0)
@@ -39,7 +39,7 @@ pub fn u_to_y(u: [u8; 32]) -> EdwardsPoint {
 }
 
 /// Applies the Curve25519 "clamping" modification to a 32-byte private key.
-pub fn clamp_private_key(mut u: [u8; 32]) -> [u8; 32] {
+pub(crate) fn clamp_private_key(mut u: [u8; 32]) -> [u8; 32] {
     u[0] &= 248;
     u[31] &= 127;
     u[31] |= 64;
@@ -47,7 +47,7 @@ pub fn clamp_private_key(mut u: [u8; 32]) -> [u8; 32] {
 }
 
 /// Calculates a "canonical" Ed25519 key pair from a 32-byte seed.
-pub fn calculate_key_pair(u: [u8; 32]) -> (Scalar, EdwardsPoint) {
+pub(crate) fn calculate_key_pair(u: [u8; 32]) -> (Scalar, EdwardsPoint) {
     let k = Scalar::from_bytes_mod_order(clamp_private_key(u));
     let ed = ED25519_BASEPOINT_POINT * k;
 
@@ -60,7 +60,7 @@ pub fn calculate_key_pair(u: [u8; 32]) -> (Scalar, EdwardsPoint) {
 }
 
 /// Converts a Montgomery u-coordinate to an Edwards point.
-pub fn convert_mont(u: [u8; 32]) -> EdwardsPoint {
+pub(crate) fn convert_mont(u: [u8; 32]) -> EdwardsPoint {
     let mut u_masked = u;
     u_masked[31] &= 127;
     u_to_y(u_masked)
