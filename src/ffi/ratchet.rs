@@ -295,7 +295,7 @@ use jni::JNIEnv;
 #[cfg(target_os = "android")]
 use jni::objects::{JByteArray, JObject, JValue};
 #[cfg(target_os = "android")]
-use jni::sys::{jbyteArray, jint, jlong, jobject};
+use jni::sys::{jbyteArray, jlong, jobject};
 
 #[cfg(target_os = "android")]
 fn get_byte_array(env: &mut JNIEnv, arr: jbyteArray) -> Option<Vec<u8>> {
@@ -313,7 +313,7 @@ fn create_byte_array(env: &mut JNIEnv, bytes: &[u8]) -> jni::errors::Result<jbyt
 }
 
 #[cfg(target_os = "android")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_ratchetInitSender(
     mut env: JNIEnv,
     _class: jni::objects::JClass,
@@ -332,12 +332,12 @@ pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule
     let sk: [u8; 32] = sk_vec.try_into().unwrap();
     let pub_key: [u8; 32] = pub_vec.try_into().unwrap();
 
-    let state = ratchet_init_sender_ffi(&sk, &pub_key);
+    let state = unsafe { ratchet_init_sender_ffi(&sk, &pub_key) };
     state as jlong
 }
 
 #[cfg(target_os = "android")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_ratchetInitReceiver(
     mut env: JNIEnv,
     _class: jni::objects::JClass,
@@ -362,24 +362,26 @@ pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule
     let priv_key: [u8; 32] = priv_vec.try_into().unwrap();
     let pub_key: [u8; 32] = pub_vec.try_into().unwrap();
 
-    let state = ratchet_init_receiver_ffi(&sk, &priv_key, &pub_key);
+    let state = unsafe { ratchet_init_receiver_ffi(&sk, &priv_key, &pub_key) };
     state as jlong
 }
 
 #[cfg(target_os = "android")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_ratchetFree(
     mut _env: JNIEnv,
     _class: jni::objects::JClass,
     state_ptr: jlong,
 ) {
     if state_ptr != 0 {
-        ratchet_free_ffi(state_ptr as *mut RatchetState);
+        unsafe {
+            ratchet_free_ffi(state_ptr as *mut RatchetState);
+        }
     }
 }
 
 #[cfg(target_os = "android")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_ratchetEncrypt(
     mut env: JNIEnv,
     _class: jni::objects::JClass,
@@ -413,13 +415,16 @@ pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule
             let h_key = env.new_string("header").unwrap();
             let c_key = env.new_string("ciphertext").unwrap();
 
+            let h_obj = unsafe { JObject::from_raw(h_arr) };
+            let c_obj = unsafe { JObject::from_raw(c_arr) };
+
             let _ = env.call_method(
                 &map,
                 "put",
                 "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
                 &[
                     JValue::Object(&JObject::from(h_key)),
-                    JValue::Object(&JObject::from_raw(h_arr)),
+                    JValue::Object(&h_obj),
                 ],
             );
 
@@ -429,7 +434,7 @@ pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule
                 "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
                 &[
                     JValue::Object(&JObject::from(c_key)),
-                    JValue::Object(&JObject::from_raw(c_arr)),
+                    JValue::Object(&c_obj),
                 ],
             );
 
@@ -440,7 +445,7 @@ pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule
 }
 
 #[cfg(target_os = "android")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_ratchetDecrypt(
     mut env: JNIEnv,
     _class: jni::objects::JClass,
