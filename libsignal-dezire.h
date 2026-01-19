@@ -174,4 +174,17 @@ int32_t ratchet_encrypt_ffi(RatchetState *state, const uint8_t *plaintext, size_
 
 int32_t ratchet_decrypt_ffi(RatchetState *state, const uint8_t *header, size_t header_len, const uint8_t *ciphertext, size_t ciphertext_len, const uint8_t *ad, size_t ad_len, RatchetDecryptResult *output);
 
+// ============================================================================
+// Utils FFI
+// ============================================================================
+
+/**
+ * Encodes a public key by prepending 0x05 (Curve25519) to the 32-byte key.
+ *
+ * # Arguments
+ * * `key` - The 32-byte public key to encode.
+ * * `out` - Buffer to write the 33-byte encoded key (must be pre-allocated).
+ */
+void encode_public_key_ffi(const uint8_t key[32], uint8_t *out);
+
 #endif /* LIBSIGNAL_DEZIRE_H */

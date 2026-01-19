@@ -1,3 +1,4 @@
+#![cfg(feature = "ffi")]
 use libsignal_dezire::ffi::ratchet::*;
 use std::ptr;
 use std::slice;

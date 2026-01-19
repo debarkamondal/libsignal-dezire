@@ -32,6 +32,7 @@
 //! * [Double Ratchet Algorithm](https://signal.org/docs/specifications/doubleratchet/)
 //! * [XEdDSA and VXEdDSA Signature Schemes](https://signal.org/docs/specifications/xeddsa/)
 
+#[cfg(feature = "ffi")]
 pub mod ffi;
 pub(crate) mod hashes;
 pub mod ratchet;
