@@ -1,10 +1,10 @@
 [package]
 name = "libsignal-dezire"
-version = "0.1.142"
+version = "0.1.143"
 edition = "2024"
 repository= "https://github.com/debarkamondal/libsignal-dezire"
 license= "AGPL-3.0-only"
-description = "A rust implementation of VXEdDSA by signal"
+description = "A rust implementation of signal protocol"
 
 [dependencies]
 curve25519-dalek = {version ="4.1.3", features = ["digest"] }
