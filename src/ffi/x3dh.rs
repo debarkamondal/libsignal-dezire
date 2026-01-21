@@ -71,7 +71,7 @@ pub unsafe extern "C" fn x3dh_initiator_ffi(
     bob_opk_public: *const u8,
     has_opk: bool,
     output: *mut X3DHInitOutput,
-) -> i32 {
+) {
     // Build the PreKeyBundle from raw inputs
     let signed_prekey = SignedPreKey {
         id: bob_spk_id,
@@ -102,8 +102,6 @@ pub unsafe extern "C" fn x3dh_initiator_ffi(
     unsafe {
         *output = X3DHInitOutput::from_result(result);
     }
-
-    unsafe { (*output).status }
 }
 
 /// Bob (Responder) performs the X3DH key agreement.

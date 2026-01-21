@@ -98,12 +98,9 @@ typedef struct X3DHInitOutput {
  * * `bob_opk_id` - Bob's One-Time PreKey ID.
  * * `bob_opk_public` - Bob's One-Time PreKey public key (optional, can be NULL/unused if has_opk=false).
  * * `has_opk` - Whether a One-Time PreKey is present.
- * * `output` - Pointer to write the result struct.
- *
- * # Returns
- * Status code (same as output->status).
+ * * `output` - Pointer to write the result struct. Check output->status for result.
  */
-int32_t x3dh_initiator_ffi(
+void x3dh_initiator_ffi(
     const uint8_t *identity_private,
     const uint8_t *bob_identity_public,
     uint32_t bob_spk_id,
