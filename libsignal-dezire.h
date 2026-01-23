@@ -83,7 +83,7 @@ bool vxeddsa_verify_ffi(const uint8_t *u,
 typedef struct X3DHInitOutput {
     uint8_t shared_secret[32];
     uint8_t ephemeral_public[32];
-    int32_t status; // 0 = Success, -1 = Invalid Signature, -2 = Invalid Key, -3 = Missing OTK
+    int32_t status; // 0 = Success, -1 = Invalid Signature, -2 = Invalid Key, -3 = Missing OPK
 } X3DHInitOutput;
 
 typedef struct X3DHResponderOutput {

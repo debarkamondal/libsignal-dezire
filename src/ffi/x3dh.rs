@@ -334,11 +334,11 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_x3dhIn
         Err(_) => return JObject::null().into_raw(),
     };
 
-    let secret_key = match env.new_string("shared_secret") {
+    let secret_key = match env.new_string("sharedSecret") {
         Ok(s) => s,
         Err(_) => return JObject::null().into_raw(),
     };
-    let public_key = match env.new_string("ephemeral_public") {
+    let public_key = match env.new_string("ephemeralPublic") {
         Ok(s) => s,
         Err(_) => return JObject::null().into_raw(),
     };
