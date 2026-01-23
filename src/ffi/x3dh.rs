@@ -17,7 +17,7 @@ use crate::x3dh::{
 pub struct X3DHInitOutput {
     pub shared_secret: [u8; 32],
     pub ephemeral_public: [u8; 32],
-    pub status: i32, // 0 = Success, -1 = Invalid Signature, -2 = Invalid Key
+    pub status: i32, // 0 = Success, -1 = Invalid Signature, -2 = Invalid Key, -3 = Missing OTK
 }
 
 impl X3DHInitOutput {
@@ -47,56 +47,101 @@ impl X3DHInitOutput {
     }
 }
 
+/// Structure for returning x3dh_responder result (C-compatible).
+#[repr(C)]
+pub struct X3DHResponderOutput {
+    pub shared_secret: [u8; 32],
+    pub status: i32, // 0 = Success, -1 = Invalid Key, -2 = Other Error
+}
+
+impl X3DHResponderOutput {
+    fn from_result(result: Result<[u8; 32], X3DHError>) -> Self {
+        match result {
+            Ok(shared_secret) => X3DHResponderOutput {
+                shared_secret,
+                status: 0,
+            },
+            Err(X3DHError::InvalidKey) => X3DHResponderOutput {
+                shared_secret: [0u8; 32],
+                status: -1,
+            },
+            Err(_) => X3DHResponderOutput {
+                shared_secret: [0u8; 32],
+                status: -2,
+            },
+        }
+    }
+}
+
+/// C-compatible PreKey Bundle input for x3dh_initiator_ffi.
+#[repr(C)]
+pub struct X3DHBundleInput {
+    pub identity_public: [u8; 32],
+    pub spk_id: u32,
+    pub spk_public: [u8; 32],
+    pub spk_signature: [u8; 96],
+    pub opk_id: u32,          // ignored if has_opk = false
+    pub opk_public: [u8; 32], // ignored if has_opk = false
+    pub has_opk: bool,
+}
+
+/// C-compatible responder keys input.
+#[repr(C)]
+pub struct X3DHResponderInput {
+    pub identity_private: [u8; 32],
+    pub spk_private: [u8; 32],
+    pub opk_private: [u8; 32], // ignored if has_opk = false
+    pub has_opk: bool,
+}
+
+/// C-compatible initiator keys from Alice.
+#[repr(C)]
+pub struct X3DHAliceKeys {
+    pub identity_public: [u8; 32],
+    pub ephemeral_public: [u8; 32],
+}
+
 // ============================================================================
 // C FFI Functions
 // ============================================================================
 
 /// Alice (Initiator) performs the X3DH key agreement.
 ///
-/// This is the `extern "C"` entry point that wraps the native Rust API.
-///
 /// # Safety
-/// * `identity_private`, `bob_identity_public`, `bob_spk_public`, `bob_spk_signature` must point to valid memory of the correct size (see types).
+/// * `identity_private` must point to a valid 32-byte array.
+/// * `bundle` must point to a valid `X3DHBundleInput` struct.
 /// * `output` must point to a writable `X3DHInitOutput` struct.
-/// * If `has_opk` is true, `bob_opk_public` must point to a valid 32-byte array.
 /// * All pointers must be properly aligned.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn x3dh_initiator_ffi(
     identity_private: &[u8; 32],
-    bob_identity_public: &[u8; 32],
-    bob_spk_id: u32,
-    bob_spk_public: &[u8; 32],
-    bob_spk_signature: &[u8; 96],
-    bob_opk_id: u32,
-    bob_opk_public: *const u8,
-    has_opk: bool,
+    bundle: &X3DHBundleInput,
     output: *mut X3DHInitOutput,
 ) {
-    // Build the PreKeyBundle from raw inputs
+    // Build the PreKeyBundle from input struct
     let signed_prekey = SignedPreKey {
-        id: bob_spk_id,
-        public_key: *bob_spk_public,
-        signature: *bob_spk_signature,
+        id: bundle.spk_id,
+        public_key: bundle.spk_public,
+        signature: bundle.spk_signature,
     };
 
-    let one_time_prekey = if has_opk && !bob_opk_public.is_null() {
-        let opk_pub = unsafe { *(bob_opk_public as *const [u8; 32]) };
+    let one_time_prekey = if bundle.has_opk {
         Some(OneTimePreKey {
-            id: bob_opk_id,
-            public_key: opk_pub,
+            id: bundle.opk_id,
+            public_key: bundle.opk_public,
         })
     } else {
         None
     };
 
-    let bundle = PreKeyBundle {
-        identity_key: *bob_identity_public,
+    let prekey_bundle = PreKeyBundle {
+        identity_key: bundle.identity_public,
         signed_prekey,
         one_time_prekey,
     };
 
     // Call the native Rust API
-    let result = x3dh_initiator(identity_private, &bundle);
+    let result = x3dh_initiator(identity_private, &prekey_bundle);
 
     // Write output
     unsafe {
@@ -106,61 +151,63 @@ pub unsafe extern "C" fn x3dh_initiator_ffi(
 
 /// Bob (Responder) performs the X3DH key agreement.
 ///
-/// This is the `extern "C"` entry point that wraps the native Rust API.
-///
 /// # Safety
-/// * `identity_private`, `signed_prekey_private` must point to valid 32-byte arrays.
-/// * `alice_identity_public`, `alice_ephemeral_public` must point to valid 32-byte arrays.
-/// * `shared_secret_out` must point to a writable 32-byte array.
-/// * If `has_opk` is true, `one_time_prekey_private` must point to a valid 32-byte array.
+/// * `responder` must point to a valid `X3DHResponderInput` struct.
+/// * `alice` must point to a valid `X3DHAliceKeys` struct.
+/// * `output` must point to a writable `X3DHResponderOutput` struct.
 /// * All pointers must be properly aligned.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn x3dh_responder_ffi(
-    identity_private: &[u8; 32],
-    signed_prekey_private: &[u8; 32],
-    one_time_prekey_private: *const u8,
-    has_opk: bool,
-    alice_identity_public: &[u8; 32],
-    alice_ephemeral_public: &[u8; 32],
-    shared_secret_out: *mut [u8; 32],
-) -> i32 {
-    // Convert optional OPK pointer to Option<&[u8; 32]>
-    let opk_private = if has_opk && !one_time_prekey_private.is_null() {
-        unsafe { Some(&*(one_time_prekey_private as *const [u8; 32])) }
+    responder: &X3DHResponderInput,
+    alice: &X3DHAliceKeys,
+    output: *mut X3DHResponderOutput,
+) {
+    // Convert optional OPK
+    let opk_private = if responder.has_opk {
+        Some(&responder.opk_private)
     } else {
         None
     };
 
     // Call the native Rust API
     let result = x3dh_responder(
-        identity_private,
-        signed_prekey_private,
+        &responder.identity_private,
+        &responder.spk_private,
         opk_private,
-        alice_identity_public,
-        alice_ephemeral_public,
+        &alice.identity_public,
+        &alice.ephemeral_public,
     );
 
-    match result {
-        Ok(shared_secret) => {
-            unsafe {
-                *shared_secret_out = shared_secret;
-            }
-            0
-        }
-        Err(X3DHError::InvalidKey) => {
-            unsafe {
-                *shared_secret_out = [0u8; 32];
-            }
-            -1
-        }
-        Err(_) => {
-            unsafe {
-                *shared_secret_out = [0u8; 32];
-            }
-            -2
-        }
+    // Write output
+    unsafe {
+        *output = X3DHResponderOutput::from_result(result);
     }
 }
+
+// Old FFI functions (commented out for reference):
+// #[unsafe(no_mangle)]
+// pub unsafe extern "C" fn x3dh_initiator_ffi_old(
+//     identity_private: &[u8; 32],
+//     bob_identity_public: &[u8; 32],
+//     bob_spk_id: u32,
+//     bob_spk_public: &[u8; 32],
+//     bob_spk_signature: &[u8; 96],
+//     bob_opk_id: u32,
+//     bob_opk_public: *const u8,
+//     has_opk: bool,
+//     output: *mut X3DHInitOutput,
+// ) { ... }
+//
+// #[unsafe(no_mangle)]
+// pub unsafe extern "C" fn x3dh_responder_ffi_old(
+//     identity_private: &[u8; 32],
+//     signed_prekey_private: &[u8; 32],
+//     one_time_prekey_private: *const u8,
+//     has_opk: bool,
+//     alice_identity_public: &[u8; 32],
+//     alice_ephemeral_public: &[u8; 32],
+//     shared_secret_out: *mut [u8; 32],
+// ) -> i32 { ... }
 
 // ============================================================================
 // JNI Bindings (Android Only)
@@ -190,7 +237,7 @@ fn get_byte_array(env: &mut JNIEnv, arr: jbyteArray) -> Option<Vec<u8>> {
 
 /// JNI binding for X3DH initiator.
 ///
-/// Calls the native Rust API via the FFI wrapper.
+/// Calls the native Rust API using internal struct conversion.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_x3dhInitiator(
@@ -225,36 +272,45 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_x3dhIn
 
     // Convert to fixed arrays
     let id_priv_fixed: [u8; 32] = id_priv.try_into().unwrap();
-    let bob_id_pub_fixed: [u8; 32] = bob_id_pub.try_into().unwrap();
-    let bob_spk_pub_fixed: [u8; 32] = bob_spk_pub.try_into().unwrap();
-    let bob_spk_sig_fixed: [u8; 96] = bob_spk_sig.try_into().unwrap();
 
-    // Build PreKeyBundle and call native API directly
-    let signed_prekey = SignedPreKey {
-        id: bob_spk_id as u32,
-        public_key: bob_spk_pub_fixed,
-        signature: bob_spk_sig_fixed,
+    // Build X3DHBundleInput struct (shared pattern with C FFI)
+    let bundle = X3DHBundleInput {
+        identity_public: bob_id_pub.try_into().unwrap(),
+        spk_id: bob_spk_id as u32,
+        spk_public: bob_spk_pub.try_into().unwrap(),
+        spk_signature: bob_spk_sig.try_into().unwrap(),
+        opk_id: bob_opk_id as u32,
+        opk_public: bob_opk_pub
+            .as_ref()
+            .and_then(|v| v.clone().try_into().ok())
+            .unwrap_or([0u8; 32]),
+        has_opk: bob_opk_pub.as_ref().map_or(false, |v| v.len() == 32),
     };
 
-    let one_time_prekey = bob_opk_pub.and_then(|opk_vec| {
-        if opk_vec.len() == 32 {
-            Some(OneTimePreKey {
-                id: bob_opk_id as u32,
-                public_key: opk_vec.try_into().unwrap(),
-            })
-        } else {
-            None
-        }
-    });
+    // Build PreKeyBundle and call native API
+    let signed_prekey = SignedPreKey {
+        id: bundle.spk_id,
+        public_key: bundle.spk_public,
+        signature: bundle.spk_signature,
+    };
 
-    let bundle = PreKeyBundle {
-        identity_key: bob_id_pub_fixed,
+    let one_time_prekey = if bundle.has_opk {
+        Some(OneTimePreKey {
+            id: bundle.opk_id,
+            public_key: bundle.opk_public,
+        })
+    } else {
+        None
+    };
+
+    let prekey_bundle = PreKeyBundle {
+        identity_key: bundle.identity_public,
         signed_prekey,
         one_time_prekey,
     };
 
     // Call native Rust API
-    let result = match x3dh_initiator(&id_priv_fixed, &bundle) {
+    let result = match x3dh_initiator(&id_priv_fixed, &prekey_bundle) {
         Ok(r) => r,
         Err(_) => return JObject::null().into_raw(),
     };
@@ -317,7 +373,7 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_x3dhIn
 
 /// JNI binding for X3DH responder.
 ///
-/// Calls the native Rust API directly.
+/// Calls the native Rust API using internal struct conversion.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_x3dhResponder(
@@ -348,27 +404,37 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_x3dhRe
     };
     let opk_priv = get_byte_array(&mut env, one_time_prekey_private_arr);
 
-    // Convert to fixed arrays
-    let id_priv_fixed: [u8; 32] = id_priv.try_into().unwrap();
-    let spk_priv_fixed: [u8; 32] = spk_priv.try_into().unwrap();
-    let alice_id_pub_fixed: [u8; 32] = alice_id_pub.try_into().unwrap();
-    let alice_ek_pub_fixed: [u8; 32] = alice_ek_pub.try_into().unwrap();
+    // Build X3DHResponderInput struct (shared pattern with C FFI)
+    let responder = X3DHResponderInput {
+        identity_private: id_priv.try_into().unwrap(),
+        spk_private: spk_priv.try_into().unwrap(),
+        opk_private: opk_priv
+            .as_ref()
+            .and_then(|v| v.clone().try_into().ok())
+            .unwrap_or([0u8; 32]),
+        has_opk: opk_priv.as_ref().map_or(false, |v| v.len() == 32),
+    };
 
-    let opk_priv_opt: Option<[u8; 32]> = opk_priv.and_then(|v| {
-        if v.len() == 32 {
-            Some(v.try_into().unwrap())
-        } else {
-            None
-        }
-    });
+    // Build X3DHAliceKeys struct (shared pattern with C FFI)
+    let alice = X3DHAliceKeys {
+        identity_public: alice_id_pub.try_into().unwrap(),
+        ephemeral_public: alice_ek_pub.try_into().unwrap(),
+    };
 
-    // Call native Rust API directly
+    // Convert optional OPK
+    let opk_private = if responder.has_opk {
+        Some(&responder.opk_private)
+    } else {
+        None
+    };
+
+    // Call native Rust API
     let result = x3dh_responder(
-        &id_priv_fixed,
-        &spk_priv_fixed,
-        opk_priv_opt.as_ref(),
-        &alice_id_pub_fixed,
-        &alice_ek_pub_fixed,
+        &responder.identity_private,
+        &responder.spk_private,
+        opk_private,
+        &alice.identity_public,
+        &alice.ephemeral_public,
     );
 
     match result {

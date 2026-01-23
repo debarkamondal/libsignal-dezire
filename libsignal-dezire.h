@@ -83,58 +83,62 @@ bool vxeddsa_verify_ffi(const uint8_t *u,
 typedef struct X3DHInitOutput {
     uint8_t shared_secret[32];
     uint8_t ephemeral_public[32];
-    int32_t status; // 0 = Success, -1 = Invalid Signature, -2 = Invalid Key, -3 = Missing OneTimeKey
+    int32_t status; // 0 = Success, -1 = Invalid Signature, -2 = Invalid Key, -3 = Missing OTK
 } X3DHInitOutput;
+
+typedef struct X3DHResponderOutput {
+    uint8_t shared_secret[32];
+    int32_t status; // 0 = Success, -1 = Invalid Key, -2 = Other Error
+} X3DHResponderOutput;
+
+typedef struct X3DHBundleInput {
+    uint8_t identity_public[32];
+    uint32_t spk_id;
+    uint8_t spk_public[32];
+    uint8_t spk_signature[96];
+    uint32_t opk_id;          // ignored if has_opk = false
+    uint8_t opk_public[32];   // ignored if has_opk = false
+    bool has_opk;
+} X3DHBundleInput;
+
+typedef struct X3DHResponderInput {
+    uint8_t identity_private[32];
+    uint8_t spk_private[32];
+    uint8_t opk_private[32];  // ignored if has_opk = false
+    bool has_opk;
+} X3DHResponderInput;
+
+typedef struct X3DHAliceKeys {
+    uint8_t identity_public[32];
+    uint8_t ephemeral_public[32];
+} X3DHAliceKeys;
 
 /**
  * Alice (Initiator) performs the X3DH key agreement.
  *
  * # Arguments
  * * `identity_private` - Alice's identity private key (32 bytes).
- * * `bob_identity_public` - Bob's identity public key (32 bytes).
- * * `bob_spk_id` - Bob's Signed PreKey ID.
- * * `bob_spk_public` - Bob's Signed PreKey public key (32 bytes).
- * * `bob_spk_signature` - Bob's Signed PreKey signature (96 bytes).
- * * `bob_opk_id` - Bob's One-Time PreKey ID.
- * * `bob_opk_public` - Bob's One-Time PreKey public key (optional, can be NULL/unused if has_opk=false).
- * * `has_opk` - Whether a One-Time PreKey is present.
+ * * `bundle` - Pointer to Bob's PreKey bundle input struct.
  * * `output` - Pointer to write the result struct. Check output->status for result.
  */
 void x3dh_initiator_ffi(
     const uint8_t *identity_private,
-    const uint8_t *bob_identity_public,
-    uint32_t bob_spk_id,
-    const uint8_t *bob_spk_public,
-    const uint8_t *bob_spk_signature,
-    uint32_t bob_opk_id,
-    const uint8_t *bob_opk_public,
-    bool has_opk,
-    struct X3DHInitOutput *output
+    const X3DHBundleInput *bundle,
+    X3DHInitOutput *output
 );
 
 /**
  * Bob (Responder) performs the X3DH key agreement.
  *
  * # Arguments
- * * `identity_private` - Bob's identity private key (32 bytes).
- * * `signed_prekey_private` - Bob's signed prekey private key (32 bytes).
- * * `one_time_prekey_private` - Bob's one-time prekey private key (optional, can be NULL if has_opk=false).
- * * `has_opk` - Whether a One-Time PreKey is used.
- * * `alice_identity_public` - Alice's identity public key (32 bytes).
- * * `alice_ephemeral_public` - Alice's ephemeral public key (32 bytes).
- * * `shared_secret_out` - Buffer to write the 32-byte shared secret.
- *
- * # Returns
- * 0 on success, < 0 on error.
+ * * `responder` - Pointer to Bob's responder keys input struct.
+ * * `alice` - Pointer to Alice's keys struct.
+ * * `output` - Pointer to write the result struct. Check output->status for result.
  */
-int32_t x3dh_responder_ffi(
-    const uint8_t *identity_private,
-    const uint8_t *signed_prekey_private,
-    const uint8_t *one_time_prekey_private,
-    bool has_opk,
-    const uint8_t *alice_identity_public,
-    const uint8_t *alice_ephemeral_public,
-    uint8_t *shared_secret_out
+void x3dh_responder_ffi(
+    const X3DHResponderInput *responder,
+    const X3DHAliceKeys *alice,
+    X3DHResponderOutput *output
 );
 
 // ============================================================================
