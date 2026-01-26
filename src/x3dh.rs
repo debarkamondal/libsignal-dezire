@@ -63,7 +63,9 @@ pub enum X3DHError {
 /// Result of a successful X3DH initiator operation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct X3DHInitResult {
+    /// The 32-byte shared secret key.
     pub shared_secret: [u8; 32],
+    /// Alice's ephemeral public key (to be sent to Bob).
     pub ephemeral_public: [u8; 32],
 }
 

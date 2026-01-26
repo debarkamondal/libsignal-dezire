@@ -120,5 +120,15 @@ When implementing features or fixing bugs:
 -   **"Linker errors":** If modifying FFI, ensure C dependencies or correct target architectures are set.
 -   **"Crypto test failures":** Check vector endianness (Signal often uses Big Endian for network, Little Endian for curve math).
 
+## 8. Security Audit
+
+This codebase has been security audited. See [AUDIT.md](./AUDIT.md) for:
+- Compliance with Signal specifications (XEdDSA, X3DH, Double Ratchet)
+- Identified issues and their resolutions
+- Security properties verified (forward secrecy, post-compromise security, etc.)
+
+**Current Status:** Production Ready ✅
+
 ---
 *Generated for AI Agent usage within libsignal-dezire.*
+

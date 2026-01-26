@@ -533,8 +533,6 @@ fn commit_state_changes(
     let (new_ck_r, _) = kdf_ck(&state.ck_r.expect("Receiving chain key missing"));
     state.ck_r = Some(new_ck_r);
 
-    state.ck_r = Some(new_ck_r);
-
     // Add overflow protection.
     state.nr = state
         .nr
