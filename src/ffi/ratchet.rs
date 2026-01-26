@@ -6,6 +6,8 @@
 use crate::ratchet::{
     RatchetError, RatchetState, decrypt, encrypt, init_receiver_state, init_sender_state,
 };
+use std::ffi::{CStr, CString};
+use std::os::raw::c_char;
 use std::ptr;
 use std::slice;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -287,6 +289,58 @@ fn map_error(e: RatchetError) -> i32 {
 }
 
 // ============================================================================
+// Serialization FFI
+// ============================================================================
+
+/// Serialize RatchetState to JSON string.
+/// Returns pointer to C string (null-terminated).
+/// Caller MUST free the string using `ratchet_free_string`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ratchet_serialize(state_ptr: *const RatchetState) -> *mut c_char {
+    if state_ptr.is_null() {
+        return ptr::null_mut();
+    }
+    let state = unsafe { &*state_ptr };
+
+    match serde_json::to_string(state) {
+        Ok(json_str) => match CString::new(json_str) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(_) => ptr::null_mut(),
+        },
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Deserialize RatchetState from JSON string.
+/// Returns pointer to RatchetState or NULL on failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ratchet_deserialize(json_ptr: *const c_char) -> *mut RatchetState {
+    if json_ptr.is_null() {
+        return ptr::null_mut();
+    }
+    let c_str = unsafe { CStr::from_ptr(json_ptr) };
+    let json_str = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    match serde_json::from_str::<RatchetState>(json_str) {
+        Ok(state) => Box::into_raw(Box::new(state)),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Free a string returned by ratchet_serialize.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ratchet_free_string(s: *mut c_char) {
+    if !s.is_null() {
+        unsafe {
+            let _ = CString::from_raw(s);
+        }
+    }
+}
+
+// ============================================================================
 // JNI Bindings (Android Only)
 // ============================================================================
 
@@ -473,5 +527,48 @@ pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule
     match decrypt(state, &header_vec, &cipher_vec, &ad_vec) {
         Ok(plaintext) => create_byte_array(&mut env, &plaintext).unwrap_or(ptr::null_mut()),
         Err(_) => ptr::null_mut(),
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_ratchetSerialize(
+    mut env: JNIEnv,
+    _class: jni::objects::JClass,
+    state_ptr: jlong,
+) -> jni::sys::jstring {
+    if state_ptr == 0 {
+        return ptr::null_mut();
+    }
+    let state = unsafe { &*(state_ptr as *const RatchetState) };
+
+    match serde_json::to_string(state) {
+        Ok(json_str) => match env.new_string(json_str) {
+            Ok(j_str) => j_str.into_raw(),
+            Err(_) => ptr::null_mut(),
+        },
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_ratchetDeserialize(
+    mut env: JNIEnv,
+    _class: jni::objects::JClass,
+    json_str: jni::objects::JString,
+) -> jlong {
+    if json_str.is_null() {
+        return 0;
+    }
+
+    let json_string: String = match env.get_string(&json_str) {
+        Ok(s) => s.into(),
+        Err(_) => return 0,
+    };
+
+    match serde_json::from_str::<RatchetState>(&json_string) {
+        Ok(state) => Box::into_raw(Box::new(state)) as jlong,
+        Err(_) => 0,
     }
 }

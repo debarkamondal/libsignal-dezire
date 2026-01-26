@@ -1,61 +1,106 @@
 # libsignal-dezire
 
-A Rust implementation of the VXEdDSA signing scheme by Signal, designed for high-performance and secure cryptographic operations. This library also provides C-compatible FFI bindings for integration with other languages.
+A pure Rust implementation of the Signal Protocol, providing end-to-end encryption for messaging applications.
 
 ## Features
 
-- **VXEdDSA Signing & Verification**: Secure deterministic signatures with verifiable randomness.
-- **X25519 & Ed25519 Interop**: Utilities to convert between Montgomery and Edwards curve points.
-- **FFI Support**: `extern "C"` functions for key generation and secret management, suitable for calling from C/C++, iOS (Swift), and Android (Kotlin/JNI).
+- **VXEdDSA** - Verifiable XEdDSA signatures with VRF output
+- **X3DH** - Extended Triple Diffie-Hellman key agreement
+- **Double Ratchet** - Session encryption with forward secrecy
+- **FFI/JNI** - C and Android bindings included
 
 ## Installation
 
-Add this to your `Cargo.toml`:
-
 ```toml
 [dependencies]
-libsignal-dezire = "0.1.11"
+libsignal-dezire = "0.1.143"
 ```
 
-## Usage
+## Quick Start
 
-### Rust Example
+### Key Exchange (X3DH)
 
 ```rust
-use libsignal_dezire::vxeddsa::{vxeddsa_sign, vxeddsa_verify};
-use libsignal_dezire::utils::calculate_key_pair;
-use rand_core::{OsRng, RngCore};
+use libsignal_dezire::x3dh::{x3dh_initiator, x3dh_responder, PreKeyBundle};
+use libsignal_dezire::vxeddsa::{gen_keypair, vxeddsa_sign};
+use libsignal_dezire::utils::encode_public_key;
 
-fn main() {
-    // 1. Generate a random private key seed
-    let mut seed_k = [0u8; 32];
-    OsRng.fill_bytes(&mut seed_k);
+// Bob publishes a prekey bundle
+let bob_identity = gen_keypair();
+let bob_spk = gen_keypair();
+let encoded_spk = encode_public_key(&bob_spk.public);
+let sig = vxeddsa_sign(&bob_identity.secret, &encoded_spk).unwrap();
 
-    // 2. Define a message to sign
-    let message = b"Hello, VXEdDSA!";
-    let mut msg_bytes = [0u8; 32];
-    // In a real app, hash the message to 32 bytes
-    msg_bytes[0..message.len()].copy_from_slice(message);
+let bundle = PreKeyBundle {
+    identity_key: bob_identity.public,
+    signed_prekey: SignedPreKey { id: 1, public_key: bob_spk.public, signature: sig.signature },
+    one_time_prekey: None,
+};
 
-    // 3. Sign
-    let (signature, vrf_output) = vxeddsa_sign(seed_k, &msg_bytes);
+// Alice initiates
+let alice_identity = gen_keypair();
+let result = x3dh_initiator(&alice_identity.secret, &bundle).unwrap();
+// result.shared_secret, result.ephemeral_public
 
-    // 4. Verify
-    // Derive public key for verification
-    let (_, public_point) = calculate_key_pair(seed_k);
-    let public_u = public_point.to_montgomery().to_bytes();
+// Bob responds
+let bob_sk = x3dh_responder(
+    &bob_identity.secret,
+    &bob_spk.secret,
+    None,
+    &alice_identity.public,
+    &result.ephemeral_public,
+).unwrap();
 
-    let verified_vrf = vxeddsa_verify(public_u, &msg_bytes, &signature);
-
-    assert_eq!(verified_vrf.unwrap(), vrf_output);
-    println!("Signature verified successfully!");
-}
+assert_eq!(result.shared_secret, bob_sk);
 ```
 
-## Contributing
+### Session Encryption (Double Ratchet)
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+```rust
+use libsignal_dezire::ratchet::{init_sender_state, init_receiver_state, encrypt, decrypt};
+
+// Initialize from X3DH shared secret
+let mut alice = init_sender_state(shared_secret, bob_dh_public).unwrap();
+let mut bob = init_receiver_state(shared_secret, bob_keypair);
+
+// Encrypt
+let (header, ciphertext) = encrypt(&mut alice, b"Hello Bob!", b"").unwrap();
+
+// Decrypt
+let plaintext = decrypt(&mut bob, &header, &ciphertext, b"").unwrap();
+```
+
+### Associated Data
+
+Construct AD for AEAD when sending the initial message:
+
+```rust
+use libsignal_dezire::utils::encode_public_key;
+
+let ad = [
+    encode_public_key(&alice_identity_public),
+    encode_public_key(&bob_identity_public),
+].concat();  // 66 bytes
+```
+
+## FFI
+
+For C/iOS integration, include `libsignal-dezire.h`. For Android, use the JNI bindings.
+
+```c
+#include "libsignal-dezire.h"
+
+X3DHInitOutput output;
+x3dh_initiator_ffi(identity_private, &bundle, &output);
+```
+
+## Security
+
+- ✅ [Security Audited](AUDIT.md)
+- ✅ Constant-time operations
+- ✅ Memory zeroization via `zeroize` crate
+- ✅ Low-order point rejection
 
 ## License
 
-This project is licensed under the AGPL-v3 License - see the [LICENSE](LICENSE) file for details.
+AGPL-v3 - see [LICENSE](LICENSE)

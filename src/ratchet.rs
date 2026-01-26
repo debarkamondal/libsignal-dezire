@@ -17,8 +17,10 @@ use aes_gcm::{
 };
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Visitor, ser::SerializeSeq};
 use sha2::{Sha256, Sha512};
 use std::collections::HashMap;
+use std::time::SystemTime;
 use subtle::ConstantTimeEq;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -67,16 +69,16 @@ pub type DhPrivateKey = StaticSecret;
 pub type KeyPair = (DhPrivateKey, DhPublicKey);
 
 /// Skipped message key with timestamp for LRU eviction
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SkippedKey {
     pub mk: [u8; 32],
-    pub timestamp: std::time::Instant,
+    pub timestamp: SystemTime,
 }
 
 /// The Header sent with every message (unencrypted form).
 ///
 /// See [Double Ratchet Spec Section 3.5](https://signal.org/docs/specifications/doubleratchet/#header-encryption).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RatchetHeader {
     /// The sender's current Diffie-Hellman public key.
     pub dh_pub: DhPublicKey,
@@ -129,7 +131,7 @@ impl RatchetHeader {
 /// the Root Key (RK), Chain Keys (CKs), and Ratchet Diffie-Hellman keys.
 ///
 /// See [Double Ratchet Spec Section 3.2](https://signal.org/docs/specifications/doubleratchet/#cryptographic-properties).
-#[derive(Zeroize, ZeroizeOnDrop)]
+#[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct RatchetState {
     // Diffie-Hellman Ratchet
     #[zeroize(skip)]
@@ -160,6 +162,10 @@ pub struct RatchetState {
 
     // Skipped Message Keys: (HeaderKey, message_number) -> SkippedKey
     #[zeroize(skip)]
+    #[serde(
+        serialize_with = "serialize_skipped_map",
+        deserialize_with = "deserialize_skipped_map"
+    )]
     pub(crate) mkskipped: HashMap<([u8; 32], u32), SkippedKey>,
 
     // Nonce counter for header encryption (stateful, per-session)
@@ -574,7 +580,7 @@ fn skip_message_keys(
             (hk, current),
             SkippedKey {
                 mk,
-                timestamp: std::time::Instant::now(),
+                timestamp: SystemTime::now(),
             },
         );
 
@@ -846,6 +852,54 @@ fn decrypt_aead(mk: &[u8; 32], ciphertext: &[u8], ad: &[u8]) -> Result<Vec<u8>, 
 }
 
 // ----------------------------------------------------------------------------
+// Serialization Helpers
+// ----------------------------------------------------------------------------
+
+fn serialize_skipped_map<S>(
+    map: &HashMap<([u8; 32], u32), SkippedKey>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let mut seq = serializer.serialize_seq(Some(map.len()))?;
+    for (k, v) in map {
+        seq.serialize_element(&(k, v))?;
+    }
+    seq.end()
+}
+
+fn deserialize_skipped_map<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<([u8; 32], u32), SkippedKey>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct MapVisitor;
+
+    impl<'de> Visitor<'de> for MapVisitor {
+        type Value = HashMap<([u8; 32], u32), SkippedKey>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a sequence of skipped key entries")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut map = HashMap::new();
+            while let Some((k, v)) = seq.next_element()? {
+                map.insert(k, v);
+            }
+            Ok(map)
+        }
+    }
+
+    deserializer.deserialize_seq(MapVisitor)
+}
+
+// ----------------------------------------------------------------------------
 // Tests
 // ----------------------------------------------------------------------------
 #[cfg(test)]
@@ -956,5 +1010,51 @@ mod tests {
 
         let err = decrypt(&mut receiver, &enc_header, &cipher, &[]);
         assert!(matches!(err, Err(RatchetError::DecryptionFailed)));
+    }
+
+    #[test]
+    fn test_serialization_roundtrip() {
+        let sk = [0x99u8; 32];
+
+        let mut rng = rand_core::OsRng;
+        let receiver_dh_private = StaticSecret::random_from_rng(&mut rng);
+        let receiver_dh_public = PublicKey::from(&receiver_dh_private);
+
+        let mut sender = init_sender_state(sk, receiver_dh_public).unwrap();
+        let mut receiver = init_receiver_state(sk, (receiver_dh_private, receiver_dh_public));
+
+        // Exchange messages
+        let (h1, c1) = encrypt(&mut sender, b"Msg1", &[]).unwrap();
+        let _ = decrypt(&mut receiver, &h1, &c1, &[]).unwrap();
+
+        // Serialize sender
+        let json = serde_json::to_string(&sender).expect("Serialize sender");
+
+        // Deserialize sender
+        let mut restored_sender: RatchetState =
+            serde_json::from_str(&json).expect("Deserialize sender");
+
+        // Continue session with restored sender
+        let (h2, c2) = encrypt(&mut restored_sender, b"Msg2", &[]).unwrap();
+        let d2 = decrypt(&mut receiver, &h2, &c2, &[]).unwrap();
+        assert_eq!(d2, b"Msg2");
+
+        // Verify skipped keys serialization
+        // Advance sender (restored) to skip a key
+        let (h3, c3) = encrypt(&mut restored_sender, b"Msg3", &[]).unwrap();
+        let (h4, c4) = encrypt(&mut restored_sender, b"Msg4", &[]).unwrap();
+
+        // Receiver receives Msg4 (skipping 3)
+        let d4 = decrypt(&mut receiver, &h4, &c4, &[]).unwrap();
+        assert_eq!(d4, b"Msg4");
+
+        // Serialize receiver
+        let rec_json = serde_json::to_string(&receiver).expect("Serialize receiver");
+        let mut restored_receiver: RatchetState =
+            serde_json::from_str(&rec_json).expect("Deserialize receiver");
+
+        // Restored receiver receives Msg3 (using skipped key)
+        let d3 = decrypt(&mut restored_receiver, &h3, &c3, &[]).unwrap();
+        assert_eq!(d3, b"Msg3");
     }
 }
