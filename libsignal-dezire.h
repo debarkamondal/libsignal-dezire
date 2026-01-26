@@ -175,6 +175,24 @@ int32_t ratchet_encrypt_ffi(RatchetState *state, const uint8_t *plaintext, size_
 
 int32_t ratchet_decrypt_ffi(RatchetState *state, const uint8_t *header, size_t header_len, const uint8_t *ciphertext, size_t ciphertext_len, const uint8_t *ad, size_t ad_len, RatchetDecryptResult *output);
 
+/**
+ * Serialize RatchetState to JSON string.
+ * Returns pointer to C string (null-terminated).
+ * Caller MUST free the string using `ratchet_free_string`.
+ */
+char *ratchet_serialize(const RatchetState *state);
+
+/**
+ * Deserialize RatchetState from JSON string.
+ * Returns pointer to RatchetState or NULL on failure.
+ */
+RatchetState *ratchet_deserialize(const char *json_str);
+
+/**
+ * Free a string returned by ratchet_serialize.
+ */
+void ratchet_free_string(char *s);
+
 // ============================================================================
 // Utils FFI
 // ============================================================================
