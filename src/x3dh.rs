@@ -11,15 +11,15 @@ use sha2::Sha512;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
-use crate::utils::{encode_public_key, is_valid_public_key};
+use crate::utils::{DecodeError, decode_public_key, encode_public_key, is_valid_public_key};
 use crate::vxeddsa::{gen_pubkey, gen_secret, vxeddsa_verify};
 
 // ============================================================================
 // Types
 // ============================================================================
 
-/// Represents a 32-byte X25519 Public Key.
-pub type X3DHPublicKey = [u8; 32];
+/// Represents a 33-byte X25519 Public Key (Encoded with 0x05 prefix).
+pub type X3DHPublicKey = [u8; 33];
 
 /// Represents a 32-byte Private Key (scalar).
 pub type X3DHPrivateKey = [u8; 32];
@@ -58,6 +58,7 @@ pub enum X3DHError {
     InvalidSignature,
     InvalidKey,
     MissingOneTimeKey,
+    DecodeFailed,
 }
 
 /// Result of a successful X3DH initiator operation.
@@ -65,8 +66,8 @@ pub enum X3DHError {
 pub struct X3DHInitResult {
     /// The 32-byte shared secret key.
     pub shared_secret: [u8; 32],
-    /// Alice's ephemeral public key (to be sent to Bob).
-    pub ephemeral_public: [u8; 32],
+    /// Alice's ephemeral public key (to be sent to Bob, encoded).
+    pub ephemeral_public: [u8; 33],
 }
 
 // ============================================================================
@@ -92,16 +93,21 @@ pub(crate) fn kdf(km: &[u8]) -> [u8; 32] {
 }
 
 /// Perform Diffie-Hellman: DH(priv, pub)
-fn dh(private: &X3DHPrivateKey, public_key_bytes: &X3DHPublicKey) -> [u8; 32] {
+fn dh(
+    private: &X3DHPrivateKey,
+    public_key_encoded: &X3DHPublicKey,
+) -> Result<[u8; 32], DecodeError> {
     let secret = StaticSecret::from(*private);
-    let public = PublicKey::from(*public_key_bytes);
-    *secret.diffie_hellman(&public).as_bytes()
+    let public_bytes = decode_public_key(public_key_encoded)?;
+    let public = PublicKey::from(public_bytes);
+    Ok(*secret.diffie_hellman(&public).as_bytes())
 }
 
 /// Generate an ephemeral keypair for X3DH.
 pub(crate) fn generate_ephemeral_keypair() -> (X3DHPrivateKey, X3DHPublicKey) {
     let private = gen_secret();
-    let public = gen_pubkey(&private);
+    let public_bytes = gen_pubkey(&private);
+    let public = encode_public_key(&public_bytes);
     (private, public)
 }
 
@@ -140,11 +146,16 @@ pub fn x3dh_initiator(
     }
 
     // 1. Verify Signed PreKey Signature: Sig(IKB, Encode(SPKB))
-    let encoded_spk = encode_public_key(&bundle.signed_prekey.public_key);
+    // SPK is already encoded in the bundle
+    let encoded_spk = bundle.signed_prekey.public_key;
+
+    // Decode Identity Key for vxeddsa_verify (it expects [u8; 32])
+    let identity_key_decoded =
+        decode_public_key(&bundle.identity_key).map_err(|_| X3DHError::InvalidKey)?;
 
     // Use native vxeddsa_verify
     if vxeddsa_verify(
-        &bundle.identity_key,
+        &identity_key_decoded,
         &encoded_spk,
         &bundle.signed_prekey.signature,
     )
@@ -157,9 +168,12 @@ pub fn x3dh_initiator(
     let (mut ephemeral_private, ephemeral_public) = generate_ephemeral_keypair();
 
     // 3. Calculate DH outputs
-    let mut dh1 = dh(identity_private, &bundle.signed_prekey.public_key); // DH(IKA, SPKB)
-    let mut dh2 = dh(&ephemeral_private, &bundle.identity_key); // DH(EKA, IKB)
-    let mut dh3 = dh(&ephemeral_private, &bundle.signed_prekey.public_key); // DH(EKA, SPKB)
+    let mut dh1 = dh(identity_private, &bundle.signed_prekey.public_key)
+        .map_err(|_| X3DHError::DecodeFailed)?; // DH(IKA, SPKB)
+    let mut dh2 =
+        dh(&ephemeral_private, &bundle.identity_key).map_err(|_| X3DHError::DecodeFailed)?; // DH(EKA, IKB)
+    let mut dh3 = dh(&ephemeral_private, &bundle.signed_prekey.public_key)
+        .map_err(|_| X3DHError::DecodeFailed)?; // DH(EKA, SPKB)
 
     let mut chained_key_material = Vec::with_capacity(32 * 4);
     chained_key_material.extend_from_slice(&dh1);
@@ -169,7 +183,7 @@ pub fn x3dh_initiator(
     // DH4 = DH(EKA, OPKB) if present
     let mut dh4_opt: Option<[u8; 32]> = None;
     if let Some(ref opk) = bundle.one_time_prekey {
-        let dh4 = dh(&ephemeral_private, &opk.public_key);
+        let dh4 = dh(&ephemeral_private, &opk.public_key).map_err(|_| X3DHError::DecodeFailed)?;
         chained_key_material.extend_from_slice(&dh4);
         dh4_opt = Some(dh4);
     }
@@ -221,9 +235,12 @@ pub fn x3dh_responder(
     }
 
     // 1. Calculate DHs (role reversal from initiator)
-    let mut dh1 = dh(signed_prekey_private, alice_identity_public); // DH(SPKB, IKA)
-    let mut dh2 = dh(identity_private, alice_ephemeral_public); // DH(IKB, EKA)
-    let mut dh3 = dh(signed_prekey_private, alice_ephemeral_public); // DH(SPKB, EKA)
+    let mut dh1 =
+        dh(signed_prekey_private, alice_identity_public).map_err(|_| X3DHError::DecodeFailed)?; // DH(SPKB, IKA)
+    let mut dh2 =
+        dh(identity_private, alice_ephemeral_public).map_err(|_| X3DHError::DecodeFailed)?; // DH(IKB, EKA)
+    let mut dh3 =
+        dh(signed_prekey_private, alice_ephemeral_public).map_err(|_| X3DHError::DecodeFailed)?; // DH(SPKB, EKA)
 
     let mut chained_key_material = Vec::with_capacity(32 * 4);
     chained_key_material.extend_from_slice(&dh1);
@@ -233,7 +250,7 @@ pub fn x3dh_responder(
     // DH4 = DH(OPKB, EKA) if OPK used
     let mut dh4_opt: Option<[u8; 32]> = None;
     if let Some(opk_private) = one_time_prekey_private {
-        let dh4 = dh(opk_private, alice_ephemeral_public);
+        let dh4 = dh(opk_private, alice_ephemeral_public).map_err(|_| X3DHError::DecodeFailed)?;
         chained_key_material.extend_from_slice(&dh4);
         dh4_opt = Some(dh4);
     }
@@ -266,18 +283,20 @@ mod tests {
     fn test_x3dh_native_api() {
         // Setup Bob's keys
         let bob_identity = gen_keypair();
+        let bob_identity_public = encode_public_key(&bob_identity.public);
         let bob_spk = gen_keypair();
+        let bob_spk_public = encode_public_key(&bob_spk.public);
 
         // Sign the SPK using native API
-        let encoded_spk = encode_public_key(&bob_spk.public);
-
-        let sig_output = vxeddsa_sign(&bob_identity.secret, &encoded_spk).expect("Signing failed");
+        // SPK is already encoded
+        let sig_output =
+            vxeddsa_sign(&bob_identity.secret, &bob_spk_public).expect("Signing failed");
 
         let bundle = PreKeyBundle {
-            identity_key: bob_identity.public,
+            identity_key: bob_identity_public,
             signed_prekey: SignedPreKey {
                 id: 1,
-                public_key: bob_spk.public,
+                public_key: bob_spk_public,
                 signature: sig_output.signature,
             },
             one_time_prekey: None,
@@ -285,6 +304,7 @@ mod tests {
 
         // Alice initiates
         let alice_identity = gen_keypair();
+        let alice_identity_public = encode_public_key(&alice_identity.public);
         let alice_result =
             x3dh_initiator(&alice_identity.secret, &bundle).expect("Alice init failed");
 
@@ -293,7 +313,7 @@ mod tests {
             &bob_identity.secret,
             &bob_spk.secret,
             None,
-            &alice_identity.public,
+            &alice_identity_public,
             &alice_result.ephemeral_public,
         )
         .expect("Bob respond failed");
@@ -306,29 +326,32 @@ mod tests {
     fn test_x3dh_native_with_opk() {
         // Setup Bob's keys
         let bob_identity = gen_keypair();
+        let bob_identity_public = encode_public_key(&bob_identity.public);
         let bob_spk = gen_keypair();
+        let bob_spk_public = encode_public_key(&bob_spk.public);
         let bob_opk = gen_keypair();
+        let bob_opk_public = encode_public_key(&bob_opk.public);
 
         // Sign the SPK
-        let encoded_spk = encode_public_key(&bob_spk.public);
-
-        let sig_output = vxeddsa_sign(&bob_identity.secret, &encoded_spk).expect("Signing failed");
+        let sig_output =
+            vxeddsa_sign(&bob_identity.secret, &bob_spk_public).expect("Signing failed");
 
         let bundle = PreKeyBundle {
-            identity_key: bob_identity.public,
+            identity_key: bob_identity_public,
             signed_prekey: SignedPreKey {
                 id: 1,
-                public_key: bob_spk.public,
+                public_key: bob_spk_public,
                 signature: sig_output.signature,
             },
             one_time_prekey: Some(OneTimePreKey {
                 id: 1,
-                public_key: bob_opk.public,
+                public_key: bob_opk_public,
             }),
         };
 
         // Alice initiates
         let alice_identity = gen_keypair();
+        let alice_identity_public = encode_public_key(&alice_identity.public);
         let alice_result =
             x3dh_initiator(&alice_identity.secret, &bundle).expect("Alice init failed");
 
@@ -337,7 +360,7 @@ mod tests {
             &bob_identity.secret,
             &bob_spk.secret,
             Some(&bob_opk.secret),
-            &alice_identity.public,
+            &alice_identity_public,
             &alice_result.ephemeral_public,
         )
         .expect("Bob respond failed");

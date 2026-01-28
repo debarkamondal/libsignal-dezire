@@ -1,6 +1,6 @@
 use libsignal_dezire::{
     ratchet::{decrypt, encrypt, init_receiver_state, init_sender_state},
-    utils::encode_public_key,
+    utils::{decode_public_key, encode_public_key},
     vxeddsa::{gen_keypair, vxeddsa_sign, vxeddsa_verify},
     x3dh::{OneTimePreKey, PreKeyBundle, SignedPreKey, x3dh_initiator, x3dh_responder},
 };
@@ -15,8 +15,8 @@ use x25519_dalek::{PublicKey, StaticSecret};
 /// 3. Encrypted Payload
 struct SignalInitialMessage {
     // --- Unencrypted X3DH "Ingredients" ---
-    pub sender_identity_key: [u8; 32],  // IK_A
-    pub sender_ephemeral_key: [u8; 32], // EK_A
+    pub sender_identity_key: [u8; 33],  // IK_A (Encoded)
+    pub sender_ephemeral_key: [u8; 33], // EK_A (Encoded)
     pub prekey_id: u32,
     pub onetime_prekey_id: Option<u32>,
 
@@ -34,23 +34,24 @@ fn test_e2e_signal_initial_message_flow() {
     // 1. Setup Bob's Identity (IK_B)
     let bob_identity_keypair = gen_keypair();
     let bob_identity_private = bob_identity_keypair.secret;
-    let bob_identity_public = bob_identity_keypair.public;
+    let bob_identity_public = encode_public_key(&bob_identity_keypair.public);
 
     // 2. Bob's Signed Prekey (SPK_B)
     let bob_spk_keypair = gen_keypair();
     let bob_spk_private = bob_spk_keypair.secret;
-    let bob_spk_public = bob_spk_keypair.public;
+    let bob_spk_public = encode_public_key(&bob_spk_keypair.public);
     let bob_spk_id = 1;
 
     // Sign SPK
-    let encoded_spk = encode_public_key(&bob_spk_public);
-    let sig_output = vxeddsa_sign(&bob_identity_private, &encoded_spk).expect("Signing failed");
+    // Sign SPK
+    // SPK is already encoded
+    let sig_output = vxeddsa_sign(&bob_identity_private, &bob_spk_public).expect("Signing failed");
     let spk_sig = sig_output.signature;
 
     // 3. Bob's One-Time Prekey (OPK_B)
     let bob_opk_keypair = gen_keypair();
     let bob_opk_private = bob_opk_keypair.secret;
-    let bob_opk_public = bob_opk_keypair.public;
+    let bob_opk_public = encode_public_key(&bob_opk_keypair.public);
     let bob_opk_id = 1;
 
     // 4. Bob "Uploads" Bundle to Server
@@ -77,9 +78,15 @@ fn test_e2e_signal_initial_message_flow() {
     // Alice's public identity key will be sent in the clear
 
     // 1b. Alice verifies Bob's Signed PreKey Signature
-    let encoded_spk_verify = encode_public_key(&bundle.signed_prekey.public_key);
+    // 1b. Alice verifies Bob's Signed PreKey Signature
+    // SPK is encoded in bundle
+    let encoded_spk_verify = bundle.signed_prekey.public_key;
+
+    // Decode identity key for vxeddsa_verify
+    let identity_key_decoded = decode_public_key(&bundle.identity_key).expect("Invalid IK");
+
     vxeddsa_verify(
-        &bundle.identity_key,
+        &identity_key_decoded,
         &encoded_spk_verify,
         &bundle.signed_prekey.signature,
     )
@@ -95,15 +102,30 @@ fn test_e2e_signal_initial_message_flow() {
     // 3. Alice initializes her Ratchet Session
     // Note: Header keys are now derived internally from the shared secret using HKDF
     // The init function uses proper context separation per Signal spec
-    let bob_initial_ratchet_key = PublicKey::from(bob_spk_public);
+    // 3. Alice initializes her Ratchet Session
+    // Note: Header keys are now derived internally from the shared secret using HKDF
+    // The init function uses proper context separation per Signal spec
+    let bob_spk_bytes = decode_public_key(&bob_spk_public).expect("Invalid SPK");
+    let bob_initial_ratchet_key = PublicKey::from(bob_spk_bytes);
 
     let mut alice_ratchet = init_sender_state(alice_sk, bob_initial_ratchet_key).unwrap();
 
     // 5. Construct Associated Data (consistent for entire session)
     // Format: IK_A || IK_B || session_version
+    // 5. Construct Associated Data (consistent for entire session)
+    // Format: IK_A || IK_B || session_version
     let mut session_ad = Vec::new();
-    session_ad.extend_from_slice(&alice_identity_keypair.public); // IK_A
-    session_ad.extend_from_slice(&bob_identity_public); // IK_B
+    session_ad.extend_from_slice(&alice_identity_keypair.public); // IK_A (raw because test used raw here before?) 
+    // Wait, alice_identity_keypair.public is 32 bytes from gen_keypair
+    // But we should consistency. Let's use raw as before or encoded?
+    // The original test used &alice_identity_keypair.public which was 32 bytes.
+    // and &bob_identity_public which was 32 bytes.
+    // Now bob_identity_public is 33 bytes (encoded).
+    // So I should decode bob_identity_public.
+    session_ad.extend_from_slice(&alice_identity_keypair.public); // IK_A (32 bytes)
+
+    let bob_identity_bytes = decode_public_key(&bob_identity_public).expect("Invalid IK_B");
+    session_ad.extend_from_slice(&bob_identity_bytes); // IK_B (32 bytes)
     session_ad.extend_from_slice(b"v1"); // Version/Context
 
     // 6. Alice Encrypts Initial Message
@@ -112,8 +134,9 @@ fn test_e2e_signal_initial_message_flow() {
         encrypt(&mut alice_ratchet, msg_plaintext, &session_ad).expect("Alice encrypt failed");
 
     // 7. Alice CONSTRUCTS the Wire Message
+    // 7. Alice CONSTRUCTS the Wire Message
     let initial_message = SignalInitialMessage {
-        sender_identity_key: alice_identity_keypair.public,
+        sender_identity_key: encode_public_key(&alice_identity_keypair.public), // encode IK_A
         sender_ephemeral_key: alice_result.ephemeral_public,
         prekey_id: bob_spk_id,
         onetime_prekey_id: Some(bob_opk_id),
@@ -150,9 +173,10 @@ fn test_e2e_signal_initial_message_flow() {
 
     // 3. Bob initializes his Ratchet Session
     // Note: Header keys are now derived internally from the shared secret using HKDF
+    let bob_spk_bytes = decode_public_key(&bob_spk_public).expect("Invalid SPK");
     let bob_initial_ratchet_pair = (
         StaticSecret::from(bob_spk_private),
-        PublicKey::from(bob_spk_public),
+        PublicKey::from(bob_spk_bytes),
     );
 
     let mut bob_ratchet = init_receiver_state(bob_sk, bob_initial_ratchet_pair);

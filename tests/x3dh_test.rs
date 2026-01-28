@@ -9,25 +9,25 @@ fn test_x3dh_success_with_opk() {
     // 1. Setup Bob's Keys
     let bob_identity_keypair = gen_keypair();
     let bob_identity_private = bob_identity_keypair.secret;
-    let bob_identity_public = bob_identity_keypair.public;
+    let bob_identity_public = encode_public_key(&bob_identity_keypair.public);
 
     let bob_spk_keypair = gen_keypair();
     let bob_spk_private = bob_spk_keypair.secret;
-    let bob_spk_public = bob_spk_keypair.public;
+    let bob_spk_public = encode_public_key(&bob_spk_keypair.public);
 
     // Sign SPK using native API
-    let encoded_spk = encode_public_key(&bob_spk_public);
-    let sig_output = vxeddsa_sign(&bob_identity_private, &encoded_spk).expect("Signing failed");
+    // SPK is already encoded
+    let sig_output = vxeddsa_sign(&bob_identity_private, &bob_spk_public).expect("Signing failed");
     let spk_sig = sig_output.signature;
 
     let bob_opk_keypair = gen_keypair();
     let bob_opk_private = bob_opk_keypair.secret;
-    let bob_opk_public = bob_opk_keypair.public;
+    let bob_opk_public = encode_public_key(&bob_opk_keypair.public);
 
     // 2. Setup Alice's Keys
     let alice_identity_keypair = gen_keypair();
     let alice_identity_private = alice_identity_keypair.secret;
-    let alice_identity_public = alice_identity_keypair.public;
+    let alice_identity_public = encode_public_key(&alice_identity_keypair.public);
 
     // 3. Build PreKey Bundle
     let bundle = PreKeyBundle {
@@ -69,21 +69,21 @@ fn test_x3dh_success_without_opk() {
     // 1. Setup Bob's Keys
     let bob_identity_keypair = gen_keypair();
     let bob_identity_private = bob_identity_keypair.secret;
-    let bob_identity_public = bob_identity_keypair.public;
+    let bob_identity_public = encode_public_key(&bob_identity_keypair.public);
 
     let bob_spk_keypair = gen_keypair();
     let bob_spk_private = bob_spk_keypair.secret;
-    let bob_spk_public = bob_spk_keypair.public;
+    let bob_spk_public = encode_public_key(&bob_spk_keypair.public);
 
     // Sign SPK
-    let encoded_spk = encode_public_key(&bob_spk_public);
-    let sig_output = vxeddsa_sign(&bob_identity_private, &encoded_spk).expect("Signing failed");
+    // Sign SPK
+    let sig_output = vxeddsa_sign(&bob_identity_private, &bob_spk_public).expect("Signing failed");
     let spk_sig = sig_output.signature;
 
     // 2. Setup Alice's Keys
     let alice_identity_keypair = gen_keypair();
     let alice_identity_private = alice_identity_keypair.secret;
-    let alice_identity_public = alice_identity_keypair.public;
+    let alice_identity_public = encode_public_key(&alice_identity_keypair.public);
 
     // 3. Build PreKey Bundle without OPK
     let bundle = PreKeyBundle {
@@ -122,13 +122,12 @@ fn test_invalid_signature() {
     // 1. Setup Bob's Keys
     let bob_identity_keypair = gen_keypair();
     let bob_identity_private = bob_identity_keypair.secret;
-    let bob_identity_public = bob_identity_keypair.public;
+    let bob_identity_public = encode_public_key(&bob_identity_keypair.public);
 
     let bob_spk_keypair = gen_keypair();
-    let bob_spk_public = bob_spk_keypair.public;
+    let bob_spk_public = encode_public_key(&bob_spk_keypair.public);
 
-    let encoded_spk = encode_public_key(&bob_spk_public);
-    let sig_output = vxeddsa_sign(&bob_identity_private, &encoded_spk).expect("Signing failed");
+    let sig_output = vxeddsa_sign(&bob_identity_private, &bob_spk_public).expect("Signing failed");
     let mut spk_sig = sig_output.signature;
 
     // Corrupt signature

@@ -8,14 +8,19 @@ use curve25519_dalek::{
 };
 use subtle::{Choice, ConditionallySelectable};
 
-pub(crate) fn is_valid_public_key(pk: &[u8; 32]) -> bool {
+pub(crate) fn is_valid_public_key(pk: &[u8; 33]) -> bool {
+    let decoded = match decode_public_key(pk) {
+        Ok(k) => k,
+        Err(_) => return false,
+    };
+
     // Reject all-zero
-    if pk.iter().all(|&b| b == 0) {
+    if decoded.iter().all(|&b| b == 0) {
         return false;
     }
 
     // Convert to Edwards
-    let edwards = convert_mont(*pk);
+    let edwards = convert_mont(decoded);
 
     // Check not identity
     if edwards.is_identity() {
@@ -73,4 +78,19 @@ pub fn encode_public_key(key: &[u8; 32]) -> [u8; 33] {
     encoded[0] = 0x05;
     encoded[1..33].copy_from_slice(key);
     encoded
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodeError {
+    InvalidLength, // Although we input [u8; 33], keeping for semantic completeness if slice api is added later
+    InvalidPrefix,
+}
+
+pub fn decode_public_key(key: &[u8; 33]) -> Result<[u8; 32], DecodeError> {
+    if key[0] != 0x05 {
+        return Err(DecodeError::InvalidPrefix);
+    }
+    let mut decoded = [0u8; 32];
+    decoded.copy_from_slice(&key[1..]);
+    Ok(decoded)
 }
