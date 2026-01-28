@@ -21,7 +21,7 @@
  */
 typedef struct KeyPair {
   uint8_t secret[32];
-  uint8_t public_[32];
+  uint8_t public_[33];
 } KeyPair;
 
 typedef struct VXEdDSAOutput {
@@ -61,7 +61,7 @@ int32_t vxeddsa_sign_ffi(const uint8_t *k,
  * Verifies a VXEdDSA signature.
  *
  * # Arguments
- * * `u` - The public key (32 bytes).
+ * * `u` - The public key (33 bytes).
  * * `msg_ptr` - Message buffer.
  * * `msg_len` - Message length.
  * * `signature` - Signature (96 bytes).
@@ -82,7 +82,7 @@ bool vxeddsa_verify_ffi(const uint8_t *u,
 
 typedef struct X3DHInitOutput {
     uint8_t shared_secret[32];
-    uint8_t ephemeral_public[32];
+    uint8_t ephemeral_public[33];
     int32_t status; // 0 = Success, -1 = Invalid Signature, -2 = Invalid Key, -3 = Missing OPK
 } X3DHInitOutput;
 
@@ -92,12 +92,12 @@ typedef struct X3DHResponderOutput {
 } X3DHResponderOutput;
 
 typedef struct X3DHBundleInput {
-    uint8_t identity_public[32];
+    uint8_t identity_public[33];
     uint32_t spk_id;
-    uint8_t spk_public[32];
+    uint8_t spk_public[33];
     uint8_t spk_signature[96];
     uint32_t opk_id;          // ignored if has_opk = false
-    uint8_t opk_public[32];   // ignored if has_opk = false
+    uint8_t opk_public[33];   // ignored if has_opk = false
     bool has_opk;
 } X3DHBundleInput;
 
@@ -109,8 +109,8 @@ typedef struct X3DHResponderInput {
 } X3DHResponderInput;
 
 typedef struct X3DHAliceKeys {
-    uint8_t identity_public[32];
-    uint8_t ephemeral_public[32];
+    uint8_t identity_public[33];
+    uint8_t ephemeral_public[33];
 } X3DHAliceKeys;
 
 /**
@@ -165,9 +165,9 @@ void ratchet_free_result_buffers(uint8_t *header, size_t header_len, uint8_t *ci
 
 void ratchet_free_byte_buffer(uint8_t *buffer, size_t len);
 
-RatchetState *ratchet_init_sender_ffi(const uint8_t sk[32], const uint8_t receiver_dh_public[32]);
+RatchetState *ratchet_init_sender_ffi(const uint8_t sk[32], const uint8_t receiver_dh_public[33]);
 
-RatchetState *ratchet_init_receiver_ffi(const uint8_t sk[32], const uint8_t receiver_dh_private[32], const uint8_t receiver_dh_public[32]);
+RatchetState *ratchet_init_receiver_ffi(const uint8_t sk[32], const uint8_t receiver_dh_private[32], const uint8_t receiver_dh_public[33]);
 
 void ratchet_free_ffi(RatchetState *state);
 

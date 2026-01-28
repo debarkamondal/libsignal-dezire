@@ -16,7 +16,7 @@ use crate::x3dh::{
 #[repr(C)]
 pub struct X3DHInitOutput {
     pub shared_secret: [u8; 32],
-    pub ephemeral_public: [u8; 32],
+    pub ephemeral_public: [u8; 33],
     pub status: i32, // 0 = Success, -1 = Invalid Signature, -2 = Invalid Key, -3 = Missing OTK
 }
 
@@ -30,17 +30,17 @@ impl X3DHInitOutput {
             },
             Err(X3DHError::InvalidSignature) => X3DHInitOutput {
                 shared_secret: [0u8; 32],
-                ephemeral_public: [0u8; 32],
+                ephemeral_public: [0u8; 33],
                 status: -1,
             },
             Err(X3DHError::InvalidKey) => X3DHInitOutput {
                 shared_secret: [0u8; 32],
-                ephemeral_public: [0u8; 32],
+                ephemeral_public: [0u8; 33],
                 status: -2,
             },
             Err(X3DHError::MissingOneTimeKey) => X3DHInitOutput {
                 shared_secret: [0u8; 32],
-                ephemeral_public: [0u8; 32],
+                ephemeral_public: [0u8; 33],
                 status: -3,
             },
         }
@@ -76,12 +76,12 @@ impl X3DHResponderOutput {
 /// C-compatible PreKey Bundle input for x3dh_initiator_ffi.
 #[repr(C)]
 pub struct X3DHBundleInput {
-    pub identity_public: [u8; 32],
+    pub identity_public: [u8; 33],
     pub spk_id: u32,
-    pub spk_public: [u8; 32],
+    pub spk_public: [u8; 33],
     pub spk_signature: [u8; 96],
     pub opk_id: u32,          // ignored if has_opk = false
-    pub opk_public: [u8; 32], // ignored if has_opk = false
+    pub opk_public: [u8; 33], // ignored if has_opk = false
     pub has_opk: bool,
 }
 
@@ -97,8 +97,8 @@ pub struct X3DHResponderInput {
 /// C-compatible initiator keys from Alice.
 #[repr(C)]
 pub struct X3DHAliceKeys {
-    pub identity_public: [u8; 32],
-    pub ephemeral_public: [u8; 32],
+    pub identity_public: [u8; 33],
+    pub ephemeral_public: [u8; 33],
 }
 
 // ============================================================================
@@ -257,11 +257,11 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_x3dhIn
         _ => return JObject::null().into_raw(),
     };
     let bob_id_pub = match get_byte_array(&mut env, bob_identity_public_arr) {
-        Some(v) if v.len() == 32 => v,
+        Some(v) if v.len() == 33 => v,
         _ => return JObject::null().into_raw(),
     };
     let bob_spk_pub = match get_byte_array(&mut env, bob_spk_public_arr) {
-        Some(v) if v.len() == 32 => v,
+        Some(v) if v.len() == 33 => v,
         _ => return JObject::null().into_raw(),
     };
     let bob_spk_sig = match get_byte_array(&mut env, bob_spk_signature_arr) {
@@ -283,8 +283,8 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_x3dhIn
         opk_public: bob_opk_pub
             .as_ref()
             .and_then(|v| v.clone().try_into().ok())
-            .unwrap_or([0u8; 32]),
-        has_opk: bob_opk_pub.as_ref().map_or(false, |v| v.len() == 32),
+            .unwrap_or([0u8; 33]),
+        has_opk: bob_opk_pub.as_ref().map_or(false, |v| v.len() == 33),
     };
 
     // Build PreKeyBundle and call native API
@@ -394,12 +394,12 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_x3dhRe
         Some(v) if v.len() == 32 => v,
         _ => return std::ptr::null_mut(),
     };
-    let alice_id_pub = match get_byte_array(&mut env, alice_identity_public_arr) {
-        Some(v) if v.len() == 32 => v,
+    let pub_vec = match get_byte_array(&mut env, alice_identity_public_arr) {
+        Some(v) if v.len() == 33 => v,
         _ => return std::ptr::null_mut(),
     };
     let alice_ek_pub = match get_byte_array(&mut env, alice_ephemeral_public_arr) {
-        Some(v) if v.len() == 32 => v,
+        Some(v) if v.len() == 33 => v,
         _ => return std::ptr::null_mut(),
     };
     let opk_priv = get_byte_array(&mut env, one_time_prekey_private_arr);

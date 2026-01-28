@@ -11,7 +11,7 @@ use sha2::Sha512;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
-use crate::utils::{DecodeError, decode_public_key, encode_public_key, is_valid_public_key};
+use crate::utils::{DecodeError, decode_public_key, is_valid_public_key};
 use crate::vxeddsa::{gen_pubkey, gen_secret, vxeddsa_verify};
 
 // ============================================================================
@@ -106,8 +106,7 @@ fn dh(
 /// Generate an ephemeral keypair for X3DH.
 pub(crate) fn generate_ephemeral_keypair() -> (X3DHPrivateKey, X3DHPublicKey) {
     let private = gen_secret();
-    let public_bytes = gen_pubkey(&private);
-    let public = encode_public_key(&public_bytes);
+    let public = gen_pubkey(&private);
     (private, public)
 }
 
@@ -149,13 +148,9 @@ pub fn x3dh_initiator(
     // SPK is already encoded in the bundle
     let encoded_spk = bundle.signed_prekey.public_key;
 
-    // Decode Identity Key for vxeddsa_verify (it expects [u8; 32])
-    let identity_key_decoded =
-        decode_public_key(&bundle.identity_key).map_err(|_| X3DHError::InvalidKey)?;
-
     // Use native vxeddsa_verify
     if vxeddsa_verify(
-        &identity_key_decoded,
+        &bundle.identity_key,
         &encoded_spk,
         &bundle.signed_prekey.signature,
     )
@@ -276,16 +271,15 @@ pub fn x3dh_responder(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::encode_public_key;
     use crate::vxeddsa::{gen_keypair, vxeddsa_sign};
 
     #[test]
     fn test_x3dh_native_api() {
         // Setup Bob's keys
         let bob_identity = gen_keypair();
-        let bob_identity_public = encode_public_key(&bob_identity.public);
+        let bob_identity_public = bob_identity.public;
         let bob_spk = gen_keypair();
-        let bob_spk_public = encode_public_key(&bob_spk.public);
+        let bob_spk_public = bob_spk.public;
 
         // Sign the SPK using native API
         // SPK is already encoded
@@ -304,7 +298,7 @@ mod tests {
 
         // Alice initiates
         let alice_identity = gen_keypair();
-        let alice_identity_public = encode_public_key(&alice_identity.public);
+        let alice_identity_public = alice_identity.public;
         let alice_result =
             x3dh_initiator(&alice_identity.secret, &bundle).expect("Alice init failed");
 
@@ -326,11 +320,11 @@ mod tests {
     fn test_x3dh_native_with_opk() {
         // Setup Bob's keys
         let bob_identity = gen_keypair();
-        let bob_identity_public = encode_public_key(&bob_identity.public);
+        let bob_identity_public = bob_identity.public;
         let bob_spk = gen_keypair();
-        let bob_spk_public = encode_public_key(&bob_spk.public);
+        let bob_spk_public = bob_spk.public;
         let bob_opk = gen_keypair();
-        let bob_opk_public = encode_public_key(&bob_opk.public);
+        let bob_opk_public = bob_opk.public;
 
         // Sign the SPK
         let sig_output =
@@ -351,7 +345,7 @@ mod tests {
 
         // Alice initiates
         let alice_identity = gen_keypair();
-        let alice_identity_public = encode_public_key(&alice_identity.public);
+        let alice_identity_public = alice_identity.public;
         let alice_result =
             x3dh_initiator(&alice_identity.secret, &bundle).expect("Alice init failed");
 

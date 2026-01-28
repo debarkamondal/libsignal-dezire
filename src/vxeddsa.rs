@@ -25,8 +25,8 @@ use crate::utils::calculate_key_pair;
 pub struct KeyPair {
     /// The 32-byte secret key.
     pub secret: [u8; 32],
-    /// The 32-byte public key.
-    pub public: [u8; 32],
+    /// The 33-byte public key.
+    pub public: [u8; 33],
 }
 
 /// Represents the output of a VXEdDSA signature operation.
@@ -49,10 +49,11 @@ pub struct VXEdDSAOutput {
 /// random number generator to create the secret key.
 pub fn gen_keypair() -> KeyPair {
     let secret = StaticSecret::random_from_rng(&mut OsRng);
-    let public = PublicKey::from(&secret);
+    let public_raw = PublicKey::from(&secret);
+    let public_bytes = crate::utils::encode_public_key(public_raw.as_bytes());
     KeyPair {
         secret: secret.to_bytes(),
-        public: public.to_bytes(),
+        public: public_bytes,
     }
 }
 
@@ -63,9 +64,10 @@ pub fn gen_secret() -> [u8; 32] {
 }
 
 /// Derives a public key from a given 32-byte secret key.
-pub fn gen_pubkey(k: &[u8; 32]) -> [u8; 32] {
+pub fn gen_pubkey(k: &[u8; 32]) -> [u8; 33] {
     let secret = StaticSecret::from(*k);
-    *PublicKey::from(&secret).as_bytes()
+    let raw = PublicKey::from(&secret);
+    crate::utils::encode_public_key(raw.as_bytes())
 }
 
 /// Computes a VXEdDSA signature and generates the associated VRF output.
@@ -172,7 +174,7 @@ pub fn vxeddsa_sign(k: &[u8; 32], message: &[u8]) -> Result<VXEdDSAOutput, ()> {
 /// * `Some(vrf)` if signature is valid, containing the 32-byte VRF output.
 /// * `None` if signature is invalid.
 pub fn vxeddsa_verify(
-    public_key: &[u8; 32],
+    public_key: &[u8; 33],
     message: &[u8],
     signature: &[u8; 96],
 ) -> Option<[u8; 32]> {
@@ -190,7 +192,8 @@ pub fn vxeddsa_verify(
 
     let s = Option::<Scalar>::from(Scalar::from_canonical_bytes(s_bytes.try_into().ok()?))?;
 
-    let A = convert_mont(*public_key);
+    let public_key_decoded = crate::utils::decode_public_key(public_key).ok()?;
+    let A = convert_mont(public_key_decoded);
     let A_bytes = A.compress().to_bytes();
 
     let V_arr: [u8; 32] = V_bytes.try_into().ok()?;

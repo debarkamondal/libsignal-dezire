@@ -91,7 +91,7 @@ pub extern "C" fn vxeddsa_sign_ffi(
 /// `true` if signature is valid, `false` otherwise.
 #[unsafe(no_mangle)]
 pub extern "C" fn vxeddsa_verify_ffi(
-    u: &[u8; 32],
+    u: &[u8; 33],
     msg_ptr: *const u8,
     msg_len: usize,
     signature: &[u8; 96],
@@ -304,15 +304,20 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_vxedds
         Err(_) => return std::ptr::null_mut(),
     };
 
-    if u.len() != 32 || sig.len() != 96 {
+    if u.len() != 33 || sig.len() != 96 {
         return std::ptr::null_mut();
     }
 
-    let u_arr: [u8; 32] = u.try_into().unwrap();
+    let u_arr: [u8; 33] = u.try_into().unwrap();
     let sig_arr: [u8; 96] = sig.try_into().unwrap();
 
+    let u_decoded = match crate::utils::decode_public_key(&u_arr) {
+        Ok(k) => k,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
     // Call native API directly
-    match vxeddsa_verify(&u_arr, &m, &sig_arr) {
+    match vxeddsa_verify(&u_decoded, &m, &sig_arr) {
         Some(v_out) => create_byte_array(&mut env, &v_out).unwrap_or(std::ptr::null_mut()),
         None => std::ptr::null_mut(),
     }

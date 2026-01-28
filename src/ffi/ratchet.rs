@@ -92,9 +92,13 @@ pub unsafe extern "C" fn ratchet_free_byte_buffer(buffer: *mut u8, len: usize) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ratchet_init_sender_ffi(
     sk: &[u8; 32],
-    receiver_dh_public: &[u8; 32],
+    receiver_dh_public: &[u8; 33],
 ) -> *mut RatchetState {
-    let receiver_pub = PublicKey::from(*receiver_dh_public);
+    let receiver_dh_decrypted = match crate::utils::decode_public_key(receiver_dh_public) {
+        Ok(k) => k,
+        Err(_) => return ptr::null_mut(),
+    };
+    let receiver_pub = PublicKey::from(receiver_dh_decrypted);
     match init_sender_state(*sk, receiver_pub) {
         Ok(state) => Box::into_raw(Box::new(state)),
         Err(_) => ptr::null_mut(),
@@ -107,11 +111,15 @@ pub unsafe extern "C" fn ratchet_init_sender_ffi(
 pub unsafe extern "C" fn ratchet_init_receiver_ffi(
     sk: &[u8; 32],
     receiver_dh_private: &[u8; 32],
-    receiver_dh_public: &[u8; 32],
+    receiver_dh_public: &[u8; 33],
 ) -> *mut RatchetState {
+    let receiver_dh_decrypted = match crate::utils::decode_public_key(receiver_dh_public) {
+        Ok(k) => k,
+        Err(_) => return ptr::null_mut(),
+    };
     let key_pair = (
         StaticSecret::from(*receiver_dh_private),
-        PublicKey::from(*receiver_dh_public),
+        PublicKey::from(receiver_dh_decrypted),
     );
     let state = init_receiver_state(*sk, key_pair);
     Box::into_raw(Box::new(state))
@@ -379,12 +387,12 @@ pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule
         _ => return 0,
     };
     let pub_vec = match get_byte_array(&mut env, receiver_pub_arr) {
-        Some(v) if v.len() == 32 => v,
+        Some(v) if v.len() == 33 => v,
         _ => return 0,
     };
 
     let sk: [u8; 32] = sk_vec.try_into().unwrap();
-    let pub_key: [u8; 32] = pub_vec.try_into().unwrap();
+    let pub_key: [u8; 33] = pub_vec.try_into().unwrap();
 
     let state = unsafe { ratchet_init_sender_ffi(&sk, &pub_key) };
     state as jlong
@@ -408,13 +416,13 @@ pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule
         _ => return 0,
     };
     let pub_vec = match get_byte_array(&mut env, pub_arr) {
-        Some(v) if v.len() == 32 => v,
+        Some(v) if v.len() == 33 => v,
         _ => return 0,
     };
 
     let sk: [u8; 32] = sk_vec.try_into().unwrap();
     let priv_key: [u8; 32] = priv_vec.try_into().unwrap();
-    let pub_key: [u8; 32] = pub_vec.try_into().unwrap();
+    let pub_key: [u8; 33] = pub_vec.try_into().unwrap();
 
     let state = unsafe { ratchet_init_receiver_ffi(&sk, &priv_key, &pub_key) };
     state as jlong
