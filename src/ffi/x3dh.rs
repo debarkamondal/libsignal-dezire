@@ -43,6 +43,11 @@ impl X3DHInitOutput {
                 ephemeral_public: [0u8; 33],
                 status: -3,
             },
+            Err(X3DHError::DecodeFailed) => X3DHInitOutput {
+                shared_secret: [0u8; 32],
+                ephemeral_public: [0u8; 33],
+                status: -4,
+            },
         }
     }
 }
@@ -394,7 +399,7 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_x3dhRe
         Some(v) if v.len() == 32 => v,
         _ => return std::ptr::null_mut(),
     };
-    let pub_vec = match get_byte_array(&mut env, alice_identity_public_arr) {
+    let alice_id_pub = match get_byte_array(&mut env, alice_identity_public_arr) {
         Some(v) if v.len() == 33 => v,
         _ => return std::ptr::null_mut(),
     };

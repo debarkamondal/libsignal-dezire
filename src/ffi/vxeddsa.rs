@@ -41,7 +41,7 @@ pub extern "C" fn gen_secret_ffi(secret_out: *mut [u8; 32]) {
 /// * `k` must be a valid pointer to a readable 32-byte secret key.
 /// * `pubkey` must be a valid pointer to a writable 32-byte memory region.
 #[unsafe(no_mangle)]
-pub extern "C" fn gen_pubkey_ffi(k: &[u8; 32], pubkey: *mut [u8; 32]) {
+pub extern "C" fn gen_pubkey_ffi(k: &[u8; 32], pubkey: *mut [u8; 33]) {
     let public = gen_pubkey(k);
     unsafe {
         (*pubkey) = public;
@@ -311,13 +311,9 @@ pub extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_vxedds
     let u_arr: [u8; 33] = u.try_into().unwrap();
     let sig_arr: [u8; 96] = sig.try_into().unwrap();
 
-    let u_decoded = match crate::utils::decode_public_key(&u_arr) {
-        Ok(k) => k,
-        Err(_) => return std::ptr::null_mut(),
-    };
-
     // Call native API directly
-    match vxeddsa_verify(&u_decoded, &m, &sig_arr) {
+    // verify expects encoded key (33 bytes)
+    match vxeddsa_verify(&u_arr, &m, &sig_arr) {
         Some(v_out) => create_byte_array(&mut env, &v_out).unwrap_or(std::ptr::null_mut()),
         None => std::ptr::null_mut(),
     }

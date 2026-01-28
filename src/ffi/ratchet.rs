@@ -541,7 +541,7 @@ pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn Java_expo_modules_libsignaldezire_LibsignalDezireModule_ratchetSerialize(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _class: jni::objects::JClass,
     state_ptr: jlong,
 ) -> jni::sys::jstring {
